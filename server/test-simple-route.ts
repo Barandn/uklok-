@@ -20,8 +20,7 @@ createSimpleRoute(
   28.9784,
   40.8518, // Napoli
   14.2681,
-  testVessel,
-  30 // 30 waypoint
+  testVessel
 ).then(result => {
   console.log('\n✅ Sonuç:', {
     success: result.success,

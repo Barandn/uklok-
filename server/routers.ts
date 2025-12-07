@@ -117,8 +117,7 @@ export const appRouter = router({
           input.startLon,
           input.endLat,
           input.endLon,
-          digitalTwin,
-          30 // 30 waypoint
+          digitalTwin
         );
         
         // Rotayı kaydet
