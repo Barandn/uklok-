@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { double, index, int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -24,6 +24,31 @@ export const users = mysqlTable("users", {
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
+
+/**
+ * Limanlar tablosu - UN/LOCODE bilgileri ve koordinatlar
+ */
+export const ports = mysqlTable(
+  "ports",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    name: varchar("name", { length: 255 }).notNull(),
+    country: varchar("country", { length: 120 }).notNull(),
+    code: varchar("code", { length: 10 }).notNull(),
+    latitude: double("latitude").notNull(),
+    longitude: double("longitude").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    codeIdx: uniqueIndex("ports_code_idx").on(table.code),
+    nameIdx: index("ports_name_idx").on(table.name),
+    countryIdx: index("ports_country_idx").on(table.country),
+  })
+);
+
+export type Port = typeof ports.$inferSelect;
+export type InsertPort = typeof ports.$inferInsert;
 
 /**
  * Gemiler tablosu - gemi özellikleri ve performans parametreleri
