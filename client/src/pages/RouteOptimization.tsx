@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +10,120 @@ import { toast } from "sonner";
 import { Loader2, Ship, Navigation as NavigationIcon, TrendingDown, MapPin, Activity } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { MapView } from "@/components/Map";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+
+type PortOption = {
+  name: string;
+  country: string;
+  code: string;
+  latitude: number;
+  longitude: number;
+};
+
+function useDebouncedValue<T>(value: T, delay = 300) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+type PortComboboxProps = {
+  label: string;
+  placeholder: string;
+  searchValue: string;
+  onSearchChange: (value: string) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  ports?: PortOption[];
+  loading?: boolean;
+  selectedLabel?: string | null;
+  onSelect: (port: PortOption) => void;
+  minCharsReached: boolean;
+};
+
+function PortCombobox({
+  label,
+  placeholder,
+  searchValue,
+  onSearchChange,
+  open,
+  onOpenChange,
+  ports,
+  loading,
+  selectedLabel,
+  onSelect,
+  minCharsReached,
+}: PortComboboxProps) {
+  return (
+    <div className="space-y-2">
+      <Label className="flex items-center gap-2">
+        <MapPin className="w-4 h-4 text-primary" />
+        {label}
+      </Label>
+      <Popover open={open} onOpenChange={onOpenChange}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            className="w-full justify-between"
+          >
+            <div className="flex flex-col items-start text-left">
+              <span className="font-medium">{selectedLabel ?? placeholder}</span>
+              <span className="text-xs text-muted-foreground">İsim, ülke veya UN/LOCODE ile arayın</span>
+            </div>
+            <MapPin className="w-4 h-4 opacity-60" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="p-0 w-[320px]" align="start">
+          <Command shouldFilter={false}>
+            <CommandInput
+              placeholder="Liman ara..."
+              value={searchValue}
+              onValueChange={onSearchChange}
+            />
+            <CommandList>
+              <CommandEmpty>
+                {loading
+                  ? "Limanlar yükleniyor..."
+                  : minCharsReached
+                    ? "Sonuç bulunamadı"
+                    : "Arama için en az 2 karakter yazın"}
+              </CommandEmpty>
+              <CommandGroup heading="Sonuçlar">
+                <ScrollArea className="max-h-64">
+                  {(ports ?? []).map((port) => (
+                    <CommandItem
+                      key={`${port.code}-${port.name}`}
+                      value={`${port.code}-${port.name}`}
+                      onSelect={() => {
+                        onSelect(port);
+                        onOpenChange(false);
+                      }}
+                      className="flex-col items-start gap-1"
+                    >
+                      <span className="font-medium">{port.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {port.country} • {port.code} • {port.latitude.toFixed(4)}, {port.longitude.toFixed(4)}
+                      </span>
+                    </CommandItem>
+                  ))}
+                </ScrollArea>
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
 
 export default function RouteOptimization() {
   const [selectedVessel, setSelectedVessel] = useState<number | null>(null);
@@ -17,16 +131,126 @@ export default function RouteOptimization() {
   const [startLon, setStartLon] = useState("28.9784");
   const [endLat, setEndLat] = useState("40.8518"); // Napoli
   const [endLon, setEndLon] = useState("14.2681");
+  const [startPortLabel, setStartPortLabel] = useState<string | null>(null);
+  const [endPortLabel, setEndPortLabel] = useState<string | null>(null);
+  const [startPortSearch, setStartPortSearch] = useState("");
+  const [endPortSearch, setEndPortSearch] = useState("");
+  const [startPortOpen, setStartPortOpen] = useState(false);
+  const [endPortOpen, setEndPortOpen] = useState(false);
+  const startSearchTerm = useDebouncedValue(startPortSearch, 400);
+  const endSearchTerm = useDebouncedValue(endPortSearch, 400);
   const [optimizedRoute, setOptimizedRoute] = useState<any>(null);
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState("");
-  
+
   const mapRef = useRef<any>(null);
   const googleRef = useRef<any>(null);
   const routePolylineRef = useRef<any>(null);
-  
+  const startMarkerRef = useRef<any>(null);
+  const endMarkerRef = useRef<any>(null);
+
   const { data: vessels, isLoading: vesselsLoading } = trpc.vessels.list.useQuery();
   const { data: routes } = trpc.routes.list.useQuery();
+  const { data: defaultPorts, isLoading: defaultPortsLoading } = trpc.ports.list.useQuery({ limit: 20 });
+  const { data: startPortResults, isFetching: startPortsFetching } = trpc.ports.search.useQuery(
+    { query: startSearchTerm, limit: 20 },
+    { enabled: startSearchTerm.trim().length >= 2 }
+  );
+  const { data: endPortResults, isFetching: endPortsFetching } = trpc.ports.search.useQuery(
+    { query: endSearchTerm, limit: 20 },
+    { enabled: endSearchTerm.trim().length >= 2 }
+  );
+
+  const minStartQuery = startSearchTerm.trim().length >= 2;
+  const minEndQuery = endSearchTerm.trim().length >= 2;
+  const startPorts = minStartQuery ? startPortResults : defaultPorts;
+  const endPorts = minEndQuery ? endPortResults : defaultPorts;
+  const startPortsLoading = minStartQuery ? startPortsFetching : defaultPortsLoading;
+  const endPortsLoading = minEndQuery ? endPortsFetching : defaultPortsLoading;
+
+  const formatPortLabel = (port: PortOption) => `${port.name} (${port.code})`;
+
+  const handlePortSelect = (port: PortOption, type: "start" | "end") => {
+    const portLabel = formatPortLabel(port);
+    if (type === "start") {
+      setStartLat(port.latitude.toString());
+      setStartLon(port.longitude.toString());
+      setStartPortLabel(portLabel);
+      setStartPortSearch(portLabel);
+      setStartPortOpen(false);
+    } else {
+      setEndLat(port.latitude.toString());
+      setEndLon(port.longitude.toString());
+      setEndPortLabel(portLabel);
+      setEndPortSearch(portLabel);
+      setEndPortOpen(false);
+    }
+  };
+
+  const updateEndpointMarkers = () => {
+    if (!mapRef.current || !googleRef.current) return;
+
+    const google = googleRef.current;
+    const map = mapRef.current;
+    const startLatNum = parseFloat(startLat);
+    const startLonNum = parseFloat(startLon);
+    const endLatNum = parseFloat(endLat);
+    const endLonNum = parseFloat(endLon);
+
+    if ([startLatNum, startLonNum, endLatNum, endLonNum].some((value) => Number.isNaN(value))) {
+      return;
+    }
+
+    const startPosition = new google.maps.LatLng(startLatNum, startLonNum);
+    const endPosition = new google.maps.LatLng(endLatNum, endLonNum);
+
+    if (!startMarkerRef.current) {
+      startMarkerRef.current = new google.maps.Marker({
+        position: startPosition,
+        map,
+        title: startPortLabel ? `Başlangıç: ${startPortLabel}` : "Başlangıç",
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 10,
+          fillColor: "#22c55e",
+          fillOpacity: 1,
+          strokeColor: "#fff",
+          strokeWeight: 3,
+        },
+      });
+    } else {
+      startMarkerRef.current.setPosition(startPosition);
+      startMarkerRef.current.setTitle(startPortLabel ? `Başlangıç: ${startPortLabel}` : "Başlangıç");
+    }
+
+    if (!endMarkerRef.current) {
+      endMarkerRef.current = new google.maps.Marker({
+        position: endPosition,
+        map,
+        title: endPortLabel ? `Varış: ${endPortLabel}` : "Varış",
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 10,
+          fillColor: "#ef4444",
+          fillOpacity: 1,
+          strokeColor: "#fff",
+          strokeWeight: 3,
+        },
+      });
+    } else {
+      endMarkerRef.current.setPosition(endPosition);
+      endMarkerRef.current.setTitle(endPortLabel ? `Varış: ${endPortLabel}` : "Varış");
+    }
+
+    const bounds = new google.maps.LatLngBounds();
+    bounds.extend(startPosition);
+    bounds.extend(endPosition);
+    map.fitBounds(bounds);
+  };
+
+  useEffect(() => {
+    updateEndpointMarkers();
+  }, [startLat, startLon, endLat, endLon, startPortLabel, endPortLabel]);
 
   const geneticMutation = trpc.optimization.runGenetic.useMutation({
     onMutate: () => {
@@ -95,8 +319,10 @@ export default function RouteOptimization() {
     const bounds = new google.maps.LatLngBounds();
     pathCoordinates.forEach((coord: any) => bounds.extend(coord));
     map.fitBounds(bounds);
-    
+
     // Waypoint'leri işaretle
+    const startTitle = startPortLabel ? `Başlangıç: ${startPortLabel}` : "Başlangıç";
+    const endTitle = endPortLabel ? `Varış: ${endPortLabel}` : "Varış";
     routeData.path.forEach((point: any, index: number) => {
       if (index === 0 || index === routeData.path.length - 1 || index % 5 === 0) {
         new google.maps.Marker({
@@ -110,7 +336,7 @@ export default function RouteOptimization() {
             strokeColor: "#fff",
             strokeWeight: 2,
           },
-          title: index === 0 ? "Başlangıç" : index === routeData.path.length - 1 ? "Varış" : `Waypoint ${index}`,
+          title: index === 0 ? startTitle : index === routeData.path.length - 1 ? endTitle : `Waypoint ${index}`,
         });
       }
     });
@@ -188,50 +414,82 @@ export default function RouteOptimization() {
               </div>
 
               {/* Başlangıç Noktası */}
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-green-600" />
-                  Başlangıç Noktası
-                </Label>
-                <div className="grid grid-cols-2 gap-2">
-                  <Input
-                    type="number"
-                    step="0.0001"
-                    placeholder="Enlem"
-                    value={startLat}
-                    onChange={(e) => setStartLat(e.target.value)}
-                  />
-                  <Input
-                    type="number"
-                    step="0.0001"
-                    placeholder="Boylam"
-                    value={startLon}
-                    onChange={(e) => setStartLon(e.target.value)}
-                  />
+              <div className="space-y-3">
+                <PortCombobox
+                  label="Başlangıç Limanı"
+                  placeholder="Liman seçin veya arayın"
+                  searchValue={startPortSearch}
+                  onSearchChange={setStartPortSearch}
+                  open={startPortOpen}
+                  onOpenChange={setStartPortOpen}
+                  ports={startPorts}
+                  loading={startPortsLoading}
+                  selectedLabel={startPortLabel}
+                  onSelect={(port) => handlePortSelect(port, "start")}
+                  minCharsReached={startPortSearch.trim().length >= 2}
+                />
+
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-green-600" />
+                    Başlangıç Koordinatları
+                  </Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      type="number"
+                      step="0.0001"
+                      placeholder="Enlem"
+                      value={startLat}
+                      onChange={(e) => setStartLat(e.target.value)}
+                    />
+                    <Input
+                      type="number"
+                      step="0.0001"
+                      placeholder="Boylam"
+                      value={startLon}
+                      onChange={(e) => setStartLon(e.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
 
               {/* Varış Noktası */}
-              <div className="space-y-2">
-                <Label className="flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-red-600" />
-                  Varış Noktası
-                </Label>
-                <div className="grid grid-cols-2 gap-2">
-                  <Input
-                    type="number"
-                    step="0.0001"
-                    placeholder="Enlem"
-                    value={endLat}
-                    onChange={(e) => setEndLat(e.target.value)}
-                  />
-                  <Input
-                    type="number"
-                    step="0.0001"
-                    placeholder="Boylam"
-                    value={endLon}
-                    onChange={(e) => setEndLon(e.target.value)}
-                  />
+              <div className="space-y-3">
+                <PortCombobox
+                  label="Varış Limanı"
+                  placeholder="Liman seçin veya arayın"
+                  searchValue={endPortSearch}
+                  onSearchChange={setEndPortSearch}
+                  open={endPortOpen}
+                  onOpenChange={setEndPortOpen}
+                  ports={endPorts}
+                  loading={endPortsLoading}
+                  selectedLabel={endPortLabel}
+                  onSelect={(port) => handlePortSelect(port, "end")}
+                  minCharsReached={endPortSearch.trim().length >= 2}
+                />
+
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-red-600" />
+                    Varış Koordinatları
+                  </Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input
+                      type="number"
+                      step="0.0001"
+                      placeholder="Enlem"
+                      value={endLat}
+                      onChange={(e) => setEndLat(e.target.value)}
+                    />
+                    <Input
+                      type="number"
+                      step="0.0001"
+                      placeholder="Boylam"
+                      value={endLon}
+                      onChange={(e) => setEndLon(e.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -301,49 +559,7 @@ export default function RouteOptimization() {
                       const google = (window as any).google;
                       mapRef.current = map;
                       googleRef.current = google;
-                      
-                      // Başlangıç ve bitiş noktalarını işaretle
-                      const start = new google.maps.LatLng(
-                        parseFloat(startLat),
-                        parseFloat(startLon)
-                      );
-                      const end = new google.maps.LatLng(
-                        parseFloat(endLat),
-                        parseFloat(endLon)
-                      );
-
-                      new google.maps.Marker({
-                        position: start,
-                        map: map,
-                        title: "Başlangıç",
-                        icon: {
-                          path: google.maps.SymbolPath.CIRCLE,
-                          scale: 10,
-                          fillColor: "#22c55e",
-                          fillOpacity: 1,
-                          strokeColor: "#fff",
-                          strokeWeight: 3,
-                        },
-                      });
-
-                      new google.maps.Marker({
-                        position: end,
-                        map: map,
-                        title: "Varış",
-                        icon: {
-                          path: google.maps.SymbolPath.CIRCLE,
-                          scale: 10,
-                          fillColor: "#ef4444",
-                          fillOpacity: 1,
-                          strokeColor: "#fff",
-                          strokeWeight: 3,
-                        },
-                      });
-
-                      const bounds = new google.maps.LatLngBounds();
-                      bounds.extend(start);
-                      bounds.extend(end);
-                      map.fitBounds(bounds);
+                      updateEndpointMarkers();
                     }}
                   />
                 </div>

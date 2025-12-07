@@ -7,6 +7,26 @@ import { z } from "zod";
 export const appRouter = router({
     // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
+  ports: router({
+    list: publicProcedure
+      .input(z.object({ limit: z.number().min(1).max(100) }).optional())
+      .query(async ({ input }) => {
+        const { listPorts } = await import("./db");
+        return await listPorts(input?.limit ?? 50);
+      }),
+
+    search: publicProcedure
+      .input(
+        z.object({
+          query: z.string().min(2),
+          limit: z.number().min(1).max(50).default(20),
+        })
+      )
+      .query(async ({ input }) => {
+        const { searchPorts } = await import("./db");
+        return await searchPorts(input.query, input.limit);
+      }),
+  }),
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {

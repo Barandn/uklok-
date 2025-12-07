@@ -1,9 +1,10 @@
-import { eq } from "drizzle-orm";
+import { asc, eq, like, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { 
-  InsertUser, 
-  users, 
-  vessels, 
+import {
+  InsertUser,
+  users,
+  ports,
+  vessels,
   InsertVessel,
   routes,
   InsertRoute,
@@ -98,6 +99,41 @@ export async function getUserByOpenId(openId: string) {
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+/**
+ * Liman İşlemleri
+ */
+export async function listPorts(limit = 50) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const safeLimit = Math.min(Math.max(limit, 1), 100);
+  return await db.select().from(ports).orderBy(asc(ports.name)).limit(safeLimit);
+}
+
+export async function searchPorts(query: string, limit = 20) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const trimmedQuery = query.trim();
+  if (trimmedQuery.length < 2) return [];
+
+  const safeLimit = Math.min(Math.max(limit, 1), 50);
+  const likeQuery = `%${trimmedQuery}%`;
+
+  return await db
+    .select()
+    .from(ports)
+    .where(
+      or(
+        like(ports.name, likeQuery),
+        like(ports.country, likeQuery),
+        like(ports.code, likeQuery)
+      )
+    )
+    .orderBy(asc(ports.name))
+    .limit(safeLimit);
 }
 
 /**
