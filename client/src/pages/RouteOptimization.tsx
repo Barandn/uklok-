@@ -143,9 +143,11 @@ export default function RouteOptimization() {
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState("");
 
+  const [mapReady, setMapReady] = useState(false);
   const mapRef = useRef<any>(null);
   const googleRef = useRef<any>(null);
   const routePolylineRef = useRef<any>(null);
+  const routeMarkersRef = useRef<any[]>([]);
   const startMarkerRef = useRef<any>(null);
   const endMarkerRef = useRef<any>(null);
 
@@ -296,7 +298,11 @@ export default function RouteOptimization() {
     if (routePolylineRef.current) {
       routePolylineRef.current.setMap(null);
     }
-    
+
+    // Önceki waypoint marker'larını temizle
+    routeMarkersRef.current.forEach((marker) => marker.setMap(null));
+    routeMarkersRef.current = [];
+
     // Rota koordinatlarını hazırla
     const pathCoordinates = routeData.path.map((point: any) => ({
       lat: point.lat,
@@ -325,7 +331,7 @@ export default function RouteOptimization() {
     const endTitle = endPortLabel ? `Varış: ${endPortLabel}` : "Varış";
     routeData.path.forEach((point: any, index: number) => {
       if (index === 0 || index === routeData.path.length - 1 || index % 5 === 0) {
-        new google.maps.Marker({
+        const marker = new google.maps.Marker({
           position: { lat: point.lat, lng: point.lon },
           map: map,
           icon: {
@@ -338,9 +344,17 @@ export default function RouteOptimization() {
           },
           title: index === 0 ? startTitle : index === routeData.path.length - 1 ? endTitle : `Waypoint ${index}`,
         });
+
+        routeMarkersRef.current.push(marker);
       }
     });
   };
+
+  useEffect(() => {
+    if (mapReady && optimizedRoute) {
+      drawRouteOnMap(optimizedRoute);
+    }
+  }, [mapReady, optimizedRoute]);
 
   const handleOptimize = () => {
     if (!selectedVessel) {
@@ -559,6 +573,7 @@ export default function RouteOptimization() {
                       const google = (window as any).google;
                       mapRef.current = map;
                       googleRef.current = google;
+                      setMapReady(true);
                       updateEndpointMarkers();
                     }}
                   />
