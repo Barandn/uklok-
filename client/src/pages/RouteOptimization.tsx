@@ -17,7 +17,6 @@ export default function RouteOptimization() {
   const [startLon, setStartLon] = useState("28.9784");
   const [endLat, setEndLat] = useState("40.8518"); // Napoli
   const [endLon, setEndLon] = useState("14.2681");
-  const [algorithm, setAlgorithm] = useState<"astar" | "genetic">("genetic");
   const [optimizedRoute, setOptimizedRoute] = useState<any>(null);
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState("");
@@ -28,54 +27,7 @@ export default function RouteOptimization() {
   
   const { data: vessels, isLoading: vesselsLoading } = trpc.vessels.list.useQuery();
   const { data: routes } = trpc.routes.list.useQuery();
-  
-  const simpleMutation = trpc.optimization.runSimple.useMutation({
-    onSuccess: (data) => {
-      toast.success(`Rota oluşturuldu! Yakıt: ${(data.totalFuel || 0).toFixed(2)} ton`);
-      setOptimizedRoute(data);
-      drawRouteOnMap(data);
-    },
-    onError: (error) => {
-      toast.error(`Hata: ${error.message}`);
-    },
-  });
-  
-  const astarMutation = trpc.optimization.runAstar.useMutation({
-    onMutate: () => {
-      setProgress(0);
-      setProgressMessage("İlk nokta belirleniyor...");
-      // Simüle edilmiş ilerleme
-      const interval = setInterval(() => {
-        setProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(interval);
-            return 90;
-          }
-          return prev + 10;
-        });
-      }, 500);
-      return { interval };
-    },
-    onSuccess: (data, _vars, context: any) => {
-      if (context?.interval) clearInterval(context.interval);
-      setProgress(100);
-      setProgressMessage("✅ Optimizasyon tamamlandı!");
-      toast.success(`A* optimizasyonu tamamlandı! Yakıt: ${(data.totalFuel || 0).toFixed(2)} ton`);
-      setOptimizedRoute(data);
-      drawRouteOnMap(data);
-      setTimeout(() => {
-        setProgress(0);
-        setProgressMessage("");
-      }, 2000);
-    },
-    onError: (error, _vars, context: any) => {
-      if (context?.interval) clearInterval(context.interval);
-      setProgress(0);
-      setProgressMessage("");
-      toast.error(`Hata: ${error.message}`);
-    },
-  });
-  
+
   const geneticMutation = trpc.optimization.runGenetic.useMutation({
     onMutate: () => {
       setProgress(0);
@@ -170,26 +122,19 @@ export default function RouteOptimization() {
       return;
     }
 
-    const params = {
+    geneticMutation.mutate({
       vesselId: selectedVessel,
       startLat: parseFloat(startLat),
       startLon: parseFloat(startLon),
       endLat: parseFloat(endLat),
       endLon: parseFloat(endLon),
+      populationSize: 20,
+      generations: 15,
       weatherEnabled: true,
-    };
-
-    // Basit rota kullan (hızlı)
-    simpleMutation.mutate({
-      vesselId: selectedVessel,
-      startLat: parseFloat(startLat),
-      startLon: parseFloat(startLon),
-      endLat: parseFloat(endLat),
-      endLon: parseFloat(endLon),
     });
   };
 
-  const isOptimizing = simpleMutation.isPending || astarMutation.isPending || geneticMutation.isPending;
+  const isOptimizing = geneticMutation.isPending;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
@@ -288,20 +233,6 @@ export default function RouteOptimization() {
                     onChange={(e) => setEndLon(e.target.value)}
                   />
                 </div>
-              </div>
-
-              {/* Algoritma Seçimi */}
-              <div className="space-y-2">
-                <Label>Optimizasyon Algoritması</Label>
-                <Select value={algorithm} onValueChange={(v: any) => setAlgorithm(v)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="astar">A* Algoritması</SelectItem>
-                    <SelectItem value="genetic">Genetik Algoritma</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
 
               {/* Optimizasyon Butonu */}
