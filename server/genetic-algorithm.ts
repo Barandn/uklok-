@@ -95,7 +95,15 @@ export async function runGeneticOptimization(params: GeneticParams): Promise<Gen
   // Nesiller boyunca evrim
   for (let gen = 0; gen < generations; gen++) {
     // Fitness değerlerini hesapla
-    population = await evaluatePopulation(population, vessel, weatherEnabled);
+    population = await evaluatePopulation(
+      population,
+      vessel,
+      weatherEnabled,
+      startLat,
+      startLon,
+      endLat,
+      endLon
+    );
 
     // En iyi bireyi bul
     population.sort((a, b) => b.fitness - a.fitness);
@@ -137,7 +145,15 @@ export async function runGeneticOptimization(params: GeneticParams): Promise<Gen
   }
 
   // Son değerlendirme
-  population = await evaluatePopulation(population, vessel, weatherEnabled);
+  population = await evaluatePopulation(
+    population,
+    vessel,
+    weatherEnabled,
+    startLat,
+    startLon,
+    endLat,
+    endLon
+  );
   population.sort((a, b) => b.fitness - a.fitness);
   const finalBest = population[0];
 
@@ -271,10 +287,22 @@ function generateRandomWaypoints(
 async function evaluatePopulation(
   population: Chromosome[],
   vessel: DigitalTwin,
-  weatherEnabled: boolean
+  weatherEnabled: boolean,
+  startLat: number,
+  startLon: number,
+  endLat: number,
+  endLon: number
 ): Promise<Chromosome[]> {
   for (const chromosome of population) {
-    await evaluateChromosome(chromosome, vessel, weatherEnabled);
+    await evaluateChromosome(
+      chromosome,
+      vessel,
+      weatherEnabled,
+      startLat,
+      startLon,
+      endLat,
+      endLon
+    );
   }
   return population;
 }
@@ -285,14 +313,22 @@ async function evaluatePopulation(
 async function evaluateChromosome(
   chromosome: Chromosome,
   vessel: DigitalTwin,
-  weatherEnabled: boolean
+  weatherEnabled: boolean,
+  startLat: number,
+  startLon: number,
+  endLat: number,
+  endLon: number
 ): Promise<void> {
   let totalFuel = 0;
   let totalCO2 = 0;
   let totalDistance = 0;
   let totalDuration = 0;
 
-  const allPoints = chromosome.waypoints;
+  const allPoints = [
+    { lat: startLat, lon: startLon },
+    ...chromosome.waypoints,
+    { lat: endLat, lon: endLon },
+  ];
 
   for (let i = 0; i < allPoints.length - 1; i++) {
     const from = allPoints[i];
