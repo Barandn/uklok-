@@ -1,6 +1,11 @@
 import * as React from "react";
 import * as SelectPrimitive from "@radix-ui/react-select";
-import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  Search,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -35,7 +40,7 @@ function SelectTrigger({
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        "border-input data-[placeholder]:text-muted-foreground [&_svg:not([class*='text-'])]:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 dark:hover:bg-input/50 flex w-fit items-center justify-between gap-2 rounded-md border bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-9 data-[size=sm]:h-8 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "border-input data-[placeholder]:text-muted-foreground [&_svg:not([class*='text-'])]:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:bg-input/30 dark:hover:bg-input/50 flex w-full items-center justify-between gap-2 rounded-md border bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-9 data-[size=sm]:h-8 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className
       )}
       {...props}
@@ -53,8 +58,38 @@ function SelectContent({
   children,
   position = "popper",
   align = "center",
+  searchable = false,
+  searchPlaceholder = "Ara veya yazmaya başla",
+  emptyMessage = "Sonuç bulunamadı",
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.Content>) {
+}: React.ComponentProps<typeof SelectPrimitive.Content> & {
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  emptyMessage?: string;
+}) {
+  const [searchTerm, setSearchTerm] = React.useState("");
+  const searchInputId = React.useId();
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
+
+  const { filteredChildren, hasMatches } = React.useMemo(() => {
+    if (!searchable || !searchTerm.trim()) {
+      return { filteredChildren: children, hasMatches: true };
+    }
+
+    return filterSelectableChildren(children, (item) => {
+      const value = (item.props.value as string | undefined) ?? "";
+      const textValue = (item.props.textValue as string | undefined) ?? "";
+      const childText = getTextFromNode(item.props.children).toLowerCase();
+      const normalizedTerm = searchTerm.trim().toLowerCase();
+
+      return (
+        value.toLowerCase().includes(normalizedTerm) ||
+        textValue.toLowerCase().includes(normalizedTerm) ||
+        childText.includes(normalizedTerm)
+      );
+    });
+  }, [children, searchable, searchTerm]);
+
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
@@ -67,8 +102,32 @@ function SelectContent({
         )}
         position={position}
         align={align}
+        onOpenAutoFocus={(event) => {
+          if (!searchable) return;
+
+          searchInputRef.current?.focus();
+          event.preventDefault();
+        }}
         {...props}
       >
+        {searchable ? (
+          <div className="sticky top-0 z-10 border-b bg-popover/80 backdrop-blur-sm p-2">
+            <div className="relative">
+              <label className="sr-only" htmlFor={searchInputId}>
+                Seçim ara
+              </label>
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                id={searchInputId}
+                ref={searchInputRef}
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                className="w-full rounded-md border bg-transparent py-2 pl-9 pr-3 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                placeholder={searchPlaceholder}
+              />
+            </div>
+          </div>
+        ) : null}
         <SelectScrollUpButton />
         <SelectPrimitive.Viewport
           className={cn(
@@ -77,12 +136,63 @@ function SelectContent({
               "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)] scroll-my-1"
           )}
         >
-          {children}
+          {hasMatches ? (
+            filteredChildren
+          ) : (
+            <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+              {emptyMessage}
+            </div>
+          )}
         </SelectPrimitive.Viewport>
         <SelectScrollDownButton />
       </SelectPrimitive.Content>
     </SelectPrimitive.Portal>
   );
+}
+
+function filterSelectableChildren(
+  children: React.ReactNode,
+  predicate: (item: React.ReactElement<React.ComponentProps<typeof SelectPrimitive.Item>>) => boolean
+) {
+  let hasMatches = false;
+
+  const filteredChildren = React.Children.map(children, (child) => {
+    if (!React.isValidElement(child)) return child;
+
+    if (child.type === SelectItem || child.type === SelectPrimitive.Item) {
+      if (predicate(child)) {
+        hasMatches = true;
+        return child;
+      }
+
+      return null;
+    }
+
+    if (child.type === SelectGroup || child.type === SelectPrimitive.Group) {
+      const result = filterSelectableChildren(child.props.children, predicate);
+
+      if (result.hasMatches) {
+        hasMatches = true;
+        return React.cloneElement(child, child.props, result.filteredChildren);
+      }
+
+      return null;
+    }
+
+    return child;
+  });
+
+  return { filteredChildren, hasMatches };
+}
+
+function getTextFromNode(node: React.ReactNode): string {
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) return node.map(getTextFromNode).join(" ");
+  if (React.isValidElement(node)) {
+    return getTextFromNode(node.props.children);
+  }
+
+  return "";
 }
 
 function SelectLabel({
