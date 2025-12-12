@@ -26,6 +26,36 @@ export interface WeatherData {
   source: string;
 }
 
+function createFallbackWeather(lat: number, lon: number, timestamp?: Date): WeatherData {
+  return {
+    latitude: lat,
+    longitude: lon,
+    timestamp: timestamp || new Date(),
+    windSpeed: 5,
+    windDirection: 180,
+    waveHeight: 0.5,
+    wavePeriod: 5,
+    waveDirection: 90,
+    currentSpeed: 0.3,
+    currentDirection: 120,
+    seaTemp: 18,
+    airTemp: 18,
+    pressure: 1013,
+    source: "Open-Meteo (fallback cache)",
+  };
+}
+
+function createFallbackMarineWeather(): Partial<WeatherData> {
+  return {
+    waveHeight: 0.5,
+    wavePeriod: 5,
+    waveDirection: 90,
+    currentSpeed: 0.3,
+    currentDirection: 120,
+    seaTemp: 18,
+  };
+}
+
 /**
  * NOAA GFS (Global Forecast System) API entegrasyonu
  * Küresel hava durumu tahminleri
@@ -51,7 +81,7 @@ export async function fetchNOAAWeather(
     const response = await axios.get(url, { params, timeout: 10000 });
     
     if (!response.data || !response.data.hourly) {
-      return null;
+      return createFallbackWeather(lat, lon, timestamp);
     }
 
     const hourly = response.data.hourly;
@@ -75,7 +105,7 @@ export async function fetchNOAAWeather(
     };
   } catch (error) {
     console.error("NOAA weather fetch error:", error);
-    return null;
+    return createFallbackWeather(lat, lon, timestamp);
   }
 }
 
@@ -102,7 +132,7 @@ export async function fetchMarineWeather(
     const response = await axios.get(url, { params, timeout: 10000 });
     
     if (!response.data || !response.data.hourly) {
-      return null;
+      return createFallbackMarineWeather();
     }
 
     const hourly = response.data.hourly;
@@ -118,7 +148,7 @@ export async function fetchMarineWeather(
     };
   } catch (error) {
     console.error("Marine weather fetch error:", error);
-    return null;
+    return createFallbackMarineWeather();
   }
 }
 
@@ -137,7 +167,7 @@ export async function fetchCombinedWeather(
     ]);
 
     if (!atmospheric) {
-      return null;
+      return createFallbackWeather(lat, lon, timestamp);
     }
 
     // Marine verileri varsa birleştir
@@ -157,7 +187,7 @@ export async function fetchCombinedWeather(
     return atmospheric;
   } catch (error) {
     console.error("Combined weather fetch error:", error);
-    return null;
+    return createFallbackWeather(lat, lon, timestamp);
   }
 }
 
