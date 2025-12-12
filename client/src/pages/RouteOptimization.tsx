@@ -27,6 +27,7 @@ type PortSelectorProps = {
   countries: string[];
   portsByCountry: Record<string, PortOption[]>;
   loading?: boolean;
+  error?: string | null;
 };
 
 function PortSelector({
@@ -38,8 +39,27 @@ function PortSelector({
   countries,
   portsByCountry,
   loading,
+  error,
 }: PortSelectorProps) {
   const countryPorts = selectedCountry ? portsByCountry[selectedCountry] ?? [] : [];
+
+  const countryPlaceholder = loading
+    ? "Ülkeler yükleniyor..."
+    : error
+      ? "Ülke verisi alınamadı"
+      : countries.length > 0
+        ? "Ülke seçin"
+        : "Ülke bulunamadı";
+
+  const portPlaceholder = !selectedCountry
+    ? "Önce ülke seçin"
+    : loading
+      ? "Limanlar yükleniyor..."
+      : error
+        ? "Limanlar alınamadı"
+        : countryPorts.length > 0
+          ? "Şehir/Liman seçin"
+          : "Bu ülkeye ait liman yok";
 
   return (
     <div className="space-y-2">
@@ -54,17 +74,31 @@ function PortSelector({
           onValueChange={(value) => {
             onCountryChange(value);
           }}
-          disabled={loading}
         >
           <SelectTrigger>
-            <SelectValue placeholder={loading ? "Ülkeler yükleniyor..." : "Önce ülke seçin"} />
+            <SelectValue placeholder={countryPlaceholder} />
           </SelectTrigger>
           <SelectContent>
-            {countries.map((country) => (
-              <SelectItem key={country} value={country}>
-                {country}
+            {loading ? (
+              <SelectItem value="loading" disabled className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Ülkeler yükleniyor...
               </SelectItem>
-            ))}
+            ) : error ? (
+              <SelectItem value="error" disabled>
+                Ülke verisi alınamadı
+              </SelectItem>
+            ) : countries.length > 0 ? (
+              countries.map((country) => (
+                <SelectItem key={country} value={country}>
+                  {country}
+                </SelectItem>
+              ))
+            ) : (
+              <SelectItem value="empty" disabled>
+                Ülke bulunamadı
+              </SelectItem>
+            )}
           </SelectContent>
         </Select>
 
@@ -76,30 +110,40 @@ function PortSelector({
               onPortChange(port);
             }
           }}
-          disabled={!selectedCountry || countryPorts.length === 0}
         >
           <SelectTrigger>
-            <SelectValue
-              placeholder={
-                !selectedCountry
-                  ? "Önce ülke seçin"
-                  : countryPorts.length > 0
-                    ? "Şehir/Liman seçin"
-                    : "Bu ülkeye ait liman yok"
-              }
-            />
+            <SelectValue placeholder={portPlaceholder} />
           </SelectTrigger>
           <SelectContent>
-            {countryPorts.map((port) => (
-              <SelectItem key={port.code} value={port.code}>
-                <div className="flex flex-col text-left">
-                  <span className="font-medium">{port.name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {port.code} • {port.latitude.toFixed(2)}, {port.longitude.toFixed(2)}
-                  </span>
-                </div>
+            {!selectedCountry ? (
+              <SelectItem value="select-country" disabled>
+                Önce ülke seçin
               </SelectItem>
-            ))}
+            ) : loading ? (
+              <SelectItem value="loading" disabled className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Limanlar yükleniyor...
+              </SelectItem>
+            ) : error ? (
+              <SelectItem value="error" disabled>
+                Liman verisi alınamadı
+              </SelectItem>
+            ) : countryPorts.length > 0 ? (
+              countryPorts.map((port) => (
+                <SelectItem key={port.code} value={port.code}>
+                  <div className="flex flex-col text-left">
+                    <span className="font-medium">{port.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {port.code} • {port.latitude.toFixed(2)}, {port.longitude.toFixed(2)}
+                    </span>
+                  </div>
+                </SelectItem>
+              ))
+            ) : (
+              <SelectItem value="empty" disabled>
+                Bu ülkeye ait liman yok
+              </SelectItem>
+            )}
           </SelectContent>
         </Select>
       </div>
@@ -133,7 +177,22 @@ export default function RouteOptimization() {
 
   const { data: vessels, isLoading: vesselsLoading } = trpc.vessels.list.useQuery();
   const { data: routes } = trpc.routes.list.useQuery();
-  const { data: ports, isLoading: portsLoading } = trpc.ports.list.useQuery({ limit: 1000 });
+  const {
+    data: ports,
+    isLoading: portsLoading,
+    isFetching: portsFetching,
+    error: portsError,
+  } = trpc.ports.list.useQuery(
+    { limit: 1000 },
+    {
+      retry: 1,
+      onError: (err) => {
+        toast.error(`Liman verisi alınamadı: ${err.message}`);
+      },
+    },
+  );
+
+  const isPortsLoading = portsLoading || portsFetching;
 
   const portsByCountry = useMemo(() => {
     const grouped: Record<string, PortOption[]> = {};
@@ -453,12 +512,13 @@ export default function RouteOptimization() {
                   label="Başlangıç Limanı"
                   selectedCountry={startCountry}
                   selectedPortCode={startPortCode}
-                  onCountryChange={(country) => handleCountryChange(country, "start")}
-                  onPortChange={(port) => handlePortSelect(port, "start")}
-                  countries={countries}
-                  portsByCountry={portsByCountry}
-                  loading={portsLoading}
-                />
+              onCountryChange={(country) => handleCountryChange(country, "start")}
+              onPortChange={(port) => handlePortSelect(port, "start")}
+              countries={countries}
+              portsByCountry={portsByCountry}
+              loading={isPortsLoading}
+              error={portsError?.message ?? null}
+            />
 
                 <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100 text-sm text-emerald-900">
                   <div className="flex items-center gap-2 font-medium">
@@ -479,12 +539,13 @@ export default function RouteOptimization() {
                   label="Varış Limanı"
                   selectedCountry={endCountry}
                   selectedPortCode={endPortCode}
-                  onCountryChange={(country) => handleCountryChange(country, "end")}
-                  onPortChange={(port) => handlePortSelect(port, "end")}
-                  countries={countries}
-                  portsByCountry={portsByCountry}
-                  loading={portsLoading}
-                />
+              onCountryChange={(country) => handleCountryChange(country, "end")}
+              onPortChange={(port) => handlePortSelect(port, "end")}
+              countries={countries}
+              portsByCountry={portsByCountry}
+              loading={isPortsLoading}
+              error={portsError?.message ?? null}
+            />
 
                 <div className="p-3 rounded-lg bg-rose-50 border border-rose-100 text-sm text-rose-900">
                   <div className="flex items-center gap-2 font-medium">
