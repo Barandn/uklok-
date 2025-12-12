@@ -86,6 +86,41 @@ function pointToLineDistance(point: number[], lineStart: number[], lineEnd: numb
 }
 
 /**
+ * Distance to closest coastline segment in kilometers
+ */
+export function distanceToCoastlineKm(lat: number, lon: number): number {
+  const data = loadCoastlineData();
+  const point = [lon, lat];
+
+  let minDistance = Infinity;
+
+  for (const feature of data.features) {
+    const { geometry } = feature;
+
+    if (geometry.type === 'LineString') {
+      const coords = geometry.coordinates as unknown as number[][];
+
+      for (let i = 0; i < coords.length - 1; i++) {
+        const dist = pointToLineDistance(point, coords[i], coords[i + 1]);
+        minDistance = Math.min(minDistance, dist);
+      }
+    } else if (geometry.type === 'MultiLineString') {
+      const multiCoords = geometry.coordinates as unknown as number[][][];
+
+      for (const lineString of multiCoords) {
+        for (let i = 0; i < lineString.length - 1; i++) {
+          const dist = pointToLineDistance(point, lineString[i], lineString[i + 1]);
+          minDistance = Math.min(minDistance, dist);
+        }
+      }
+    }
+  }
+
+  // Rough conversion: 1 degree ≈ 111 km
+  return isFinite(minDistance) ? minDistance * 111 : Infinity;
+}
+
+/**
  * Check if two line segments intersect
  */
 function lineSegmentsIntersect(

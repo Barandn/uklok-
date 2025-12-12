@@ -28,8 +28,8 @@ runGeneticOptimization({
   eliteCount: 3,
   numWaypoints: 10,
   weatherEnabled: false,
-  avoidShallowWater: false,
-  minDepth: 10,
+  avoidShallowWater: true,
+  minDepth: 24,
 }).then(result => {
   console.log('\n✅ Sonuç:', {
     success: result.success,

@@ -120,7 +120,7 @@ export const appRouter = router({
         
         const vessel = await getVesselById(input.vesselId);
         if (!vessel) throw new Error("Vessel not found");
-        
+
         const digitalTwin = new DigitalTwin({
           dwt: vessel.dwt,
           length: vessel.length || 200,
@@ -200,7 +200,10 @@ export const appRouter = router({
           fuelConsumptionRate: vessel.fuelConsumptionRate || 50,
           enginePower: vessel.enginePower || 10000,
         });
-        
+
+        // Draft + güvenlik payı kadar minimum derinlik
+        const minDepthMeters = Math.max(20, (digitalTwin.vessel.draft || 10) * 2);
+
         const result = await runGeneticOptimization({
           startLat: input.startLat,
           startLon: input.startLon,
@@ -214,8 +217,8 @@ export const appRouter = router({
           eliteCount: 2,
           numWaypoints: 6, // Daha az waypoint
           weatherEnabled: false, // Hızlı test için kapalı
-          avoidShallowWater: false, // Sadece kara kontrolü
-          minDepth: 20,
+          avoidShallowWater: true, // Sığ su ve kara filtresi aktif
+          minDepth: minDepthMeters,
         });
         
         // Rotayı kaydet
