@@ -9,7 +9,7 @@ export const appRouter = router({
   system: systemRouter,
   ports: router({
     list: publicProcedure
-      .input(z.object({ limit: z.number().min(1).max(100) }).optional())
+      .input(z.object({ limit: z.number().min(1).max(1000) }).optional())
       .query(async ({ input }) => {
         const { listPorts } = await import("./db");
         return await listPorts(input?.limit ?? 50);

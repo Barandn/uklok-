@@ -108,7 +108,7 @@ export async function listPorts(limit = 50) {
   const db = await getDb();
   if (!db) return [];
 
-  const safeLimit = Math.min(Math.max(limit, 1), 100);
+  const safeLimit = Math.min(Math.max(limit, 1), 1000);
   return await db.select().from(ports).orderBy(asc(ports.name)).limit(safeLimit);
 }
 
