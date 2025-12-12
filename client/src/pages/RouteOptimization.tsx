@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -461,27 +460,16 @@ export default function RouteOptimization() {
                   loading={portsLoading}
                 />
 
-                <div className="space-y-2">
-                  <Label className="flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-green-600" />
+                <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100 text-sm text-emerald-900">
+                  <div className="flex items-center gap-2 font-medium">
+                    <MapPin className="w-4 h-4" />
                     Başlangıç Koordinatları
-                  </Label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      type="number"
-                      step="0.0001"
-                      placeholder="Enlem"
-                      value={startLat}
-                      onChange={(e) => setStartLat(e.target.value)}
-                    />
-                    <Input
-                      type="number"
-                      step="0.0001"
-                      placeholder="Boylam"
-                      value={startLon}
-                      onChange={(e) => setStartLon(e.target.value)}
-                    />
                   </div>
+                  <p className="mt-1 text-emerald-800">
+                    {startLat && startLon
+                      ? `${parseFloat(startLat).toFixed(4)}, ${parseFloat(startLon).toFixed(4)}`
+                      : "Lütfen bir liman seçin"}
+                  </p>
                 </div>
               </div>
 
@@ -498,27 +486,16 @@ export default function RouteOptimization() {
                   loading={portsLoading}
                 />
 
-                <div className="space-y-2">
-                  <Label className="flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-red-600" />
+                <div className="p-3 rounded-lg bg-rose-50 border border-rose-100 text-sm text-rose-900">
+                  <div className="flex items-center gap-2 font-medium">
+                    <MapPin className="w-4 h-4" />
                     Varış Koordinatları
-                  </Label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      type="number"
-                      step="0.0001"
-                      placeholder="Enlem"
-                      value={endLat}
-                      onChange={(e) => setEndLat(e.target.value)}
-                    />
-                    <Input
-                      type="number"
-                      step="0.0001"
-                      placeholder="Boylam"
-                      value={endLon}
-                      onChange={(e) => setEndLon(e.target.value)}
-                    />
                   </div>
+                  <p className="mt-1 text-rose-800">
+                    {endLat && endLon
+                      ? `${parseFloat(endLat).toFixed(4)}, ${parseFloat(endLon).toFixed(4)}`
+                      : "Lütfen bir liman seçin"}
+                  </p>
                 </div>
               </div>
 
