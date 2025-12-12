@@ -4,6 +4,7 @@
  */
 
 import axios from "axios";
+import { distanceToCoastlineKm, isPointOnLand as isCoastlinePointOnLand } from "./coastline";
 
 /**
  * Hava durumu veri yapısı
@@ -199,85 +200,25 @@ export async function fetchWeatherAlongRoute(
  * Basit bir implementasyon - gerçek GEBCO verisi için ayrı servis gerekli
  */
 export function checkDepth(lat: number, lon: number): number {
-  // Şimdilik basit bir yaklaşım: kıyıya yakınlık kontrolü
-  // Gerçek uygulamada GEBCO NetCDF dosyasından okunmalı
-  
-  // Karaları tespit et (çok basit)
-  const isLand = isPointOnLand(lat, lon);
-  if (isLand) {
+  // Kara kontrolü - coastline verisi ile
+  if (isCoastlinePointOnLand(lat, lon, 0.01)) {
     return 0; // Kara
   }
-  
-  // Default olarak derin deniz
-  return 5000; // meters
-}
 
-/**
- * Basit kara tespiti - Deniz rotaları için optimize edilmiş
- * Major denizleri ve okyanuslari tanır
- */
-function isPointOnLand(lat: number, lon: number): boolean {
-  // Akdeniz (Mediterranean Sea)
-  if (lat >= 30 && lat <= 46 && lon >= -6 && lon <= 37) {
-    return false; // Akdeniz - deniz
+  // Kıyıya uzaklığa bağlı basit batimetri modeli (fallback)
+  const distanceKm = distanceToCoastlineKm(lat, lon);
+
+  if (!isFinite(distanceKm)) {
+    return 5000; // Veri yoksa derin deniz varsayımı
   }
-  
-  // Karadeniz (Black Sea)
-  if (lat >= 41 && lat <= 47 && lon >= 27 && lon <= 42) {
-    return false; // Karadeniz - deniz
-  }
-  
-  // Ege Denizi (Aegean Sea)
-  if (lat >= 35 && lat <= 41 && lon >= 23 && lon <= 29) {
-    return false; // Ege - deniz
-  }
-  
-  // Adriyatik Denizi (Adriatic Sea)
-  if (lat >= 39 && lat <= 46 && lon >= 12 && lon <= 20) {
-    return false; // Adriyatik - deniz
-  }
-  
-  // Atlantik Okyanusu (Atlantic Ocean)
-  if (lon >= -80 && lon <= -6) {
-    if (lat >= -60 && lat <= 70) {
-      return false; // Atlantik - deniz
-    }
-  }
-  
-  // Hint Okyanusu (Indian Ocean)
-  if (lat >= -60 && lat <= 30 && lon >= 20 && lon <= 120) {
-    return false; // Hint Okyanusu - deniz
-  }
-  
-  // Pasifik Okyanusu (Pacific Ocean)
-  if (lon >= 120 || lon <= -80) {
-    if (lat >= -60 && lat <= 60) {
-      return false; // Pasifik - deniz
-    }
-  }
-  
-  // Kızıldeniz (Red Sea)
-  if (lat >= 12 && lat <= 30 && lon >= 32 && lon <= 44) {
-    return false; // Kızıldeniz - deniz
-  }
-  
-  // Basra Körfezi (Persian Gulf)
-  if (lat >= 24 && lat <= 30 && lon >= 48 && lon <= 57) {
-    return false; // Basra Körfezi - deniz
-  }
-  
-  // Kuzey Denizi (North Sea)
-  if (lat >= 51 && lat <= 62 && lon >= -4 && lon <= 9) {
-    return false; // Kuzey Denizi - deniz
-  }
-  
-  // Baltik Denizi (Baltic Sea)
-  if (lat >= 53 && lat <= 66 && lon >= 10 && lon <= 30) {
-    return false; // Baltik - deniz
-  }
-  
-  // Eğer hiçbir deniz bölgesine girmiyorsa, kara olarak kabul et
-  return true;
+
+  if (distanceKm < 1) return 2; // Liman / sahile çok yakın
+  if (distanceKm < 5) return 8; // Kıyı şeridi
+  if (distanceKm < 15) return 25; // Kıyıdan açıkta ama hâlâ sığ
+  if (distanceKm < 50) return 120; // Kıta sahanlığı
+  if (distanceKm < 200) return 500; // Kenar şelfi
+
+  return 3000; // Açık deniz
 }
 
 /**
