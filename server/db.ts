@@ -1,5 +1,8 @@
+import fs from "fs/promises";
+import path from "path";
 import { asc, eq, like, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import { TRPCError } from "@trpc/server";
 import {
   InsertUser,
   users,
@@ -11,11 +14,16 @@ import {
   waypoints,
   InsertWaypoint,
   simulations,
-  InsertSimulation
+  InsertSimulation,
+  type Port
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
+let cachedStaticPorts: Port[] | null = null;
+const staticPortsPath = path.resolve(process.cwd(), "server/data/ports.json");
+
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
@@ -28,6 +36,31 @@ export async function getDb() {
     }
   }
   return _db;
+}
+
+async function loadStaticPorts(): Promise<Port[]> {
+  if (cachedStaticPorts) return cachedStaticPorts;
+
+  try {
+    const fileContents = await fs.readFile(staticPortsPath, "utf-8");
+    const records = JSON.parse(fileContents) as Array<
+      Pick<Port, "name" | "country" | "code" | "latitude" | "longitude">
+    >;
+
+    cachedStaticPorts = records
+      .map((port, index) => ({
+        id: index + 1,
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+        ...port,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return cachedStaticPorts;
+  } catch (error) {
+    console.error("[Ports] Failed to load static port data:", error);
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Port data unavailable" });
+  }
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {
@@ -105,35 +138,74 @@ export async function getUserByOpenId(openId: string) {
  * Liman İşlemleri
  */
 export async function listPorts(limit = 50) {
-  const db = await getDb();
-  if (!db) return [];
+  const safeLimit = clamp(limit, 1, 1000);
 
-  const safeLimit = Math.min(Math.max(limit, 1), 1000);
-  return await db.select().from(ports).orderBy(asc(ports.name)).limit(safeLimit);
+  try {
+    const db = await getDb();
+    if (!db) {
+      console.warn("[Database] listPorts falling back to static data: database not available");
+      const staticPorts = await loadStaticPorts();
+      return staticPorts.slice(0, safeLimit);
+    }
+
+    return await db.select().from(ports).orderBy(asc(ports.name)).limit(safeLimit);
+  } catch (error) {
+    console.error("[Database] listPorts failed, falling back to static data:", error);
+    const staticPorts = await loadStaticPorts();
+    return staticPorts.slice(0, safeLimit);
+  }
 }
 
 export async function searchPorts(query: string, limit = 20) {
-  const db = await getDb();
-  if (!db) return [];
-
   const trimmedQuery = query.trim();
   if (trimmedQuery.length < 2) return [];
 
-  const safeLimit = Math.min(Math.max(limit, 1), 50);
+  const safeLimit = clamp(limit, 1, 50);
   const likeQuery = `%${trimmedQuery}%`;
 
-  return await db
-    .select()
-    .from(ports)
-    .where(
-      or(
-        like(ports.name, likeQuery),
-        like(ports.country, likeQuery),
-        like(ports.code, likeQuery)
+  try {
+    const db = await getDb();
+    if (!db) {
+      console.warn("[Database] searchPorts falling back to static data: database not available");
+      const staticPorts = await loadStaticPorts();
+      return staticPorts
+        .filter((port) => {
+          const lowerQuery = trimmedQuery.toLowerCase();
+          return (
+            port.name.toLowerCase().includes(lowerQuery) ||
+            port.country.toLowerCase().includes(lowerQuery) ||
+            port.code.toLowerCase().includes(lowerQuery)
+          );
+        })
+        .slice(0, safeLimit);
+    }
+
+    return await db
+      .select()
+      .from(ports)
+      .where(
+        or(
+          like(ports.name, likeQuery),
+          like(ports.country, likeQuery),
+          like(ports.code, likeQuery)
+        )
       )
-    )
-    .orderBy(asc(ports.name))
-    .limit(safeLimit);
+      .orderBy(asc(ports.name))
+      .limit(safeLimit);
+  } catch (error) {
+    console.error("[Database] searchPorts failed, falling back to static data:", error);
+    const staticPorts = await loadStaticPorts();
+    return staticPorts
+      .filter((port) => {
+        const lowerQuery = trimmedQuery.toLowerCase();
+        return (
+          port.name.toLowerCase().includes(lowerQuery) ||
+          port.country.toLowerCase().includes(lowerQuery) ||
+          port.code.toLowerCase().includes(lowerQuery)
+        );
+      })
+      .slice(0, safeLimit);
+  }
 }
 
 /**
