@@ -238,9 +238,9 @@ function generateRandomWaypoints(
     // Rastgele sapma ekle (±20 derece, ±20% mesafe)
     const randomBearing = bearing + (Math.random() - 0.5) * 40;
     const randomDistance = baseDistance * (0.8 + Math.random() * 0.4);
-    
+
     let point = calculateDestinationPoint(startLat, startLon, randomDistance, randomBearing);
-    
+
     // Kara ve sığ su kontrolü
     let attempts = 0;
     while (attempts < 20) {
@@ -253,6 +253,19 @@ function generateRandomWaypoints(
         continue;
       }
       
+      const prevPoint =
+        waypoints.length === 0
+          ? { lat: startLat, lon: startLon }
+          : waypoints[waypoints.length - 1];
+
+      // Segmentin karaya değmediğinden emin ol
+      if (routeCrossesLand(prevPoint.lat, prevPoint.lon, point.lat, point.lon)) {
+        const newBearing = bearing + (Math.random() - 0.5) * 60;
+        point = calculateDestinationPoint(startLat, startLon, randomDistance, newBearing);
+        attempts++;
+        continue;
+      }
+
       const depth = checkDepth(point.lat, point.lon);
       
       // Kara kontrolü (backup)
@@ -323,6 +336,7 @@ async function evaluateChromosome(
   let totalCO2 = 0;
   let totalDistance = 0;
   let totalDuration = 0;
+  let landPenalty = 0;
 
   const allPoints = [
     { lat: startLat, lon: startLon },
@@ -335,6 +349,11 @@ async function evaluateChromosome(
     const to = allPoints[i + 1];
 
     const distance = calculateGreatCircleDistance(from.lat, from.lon, to.lat, to.lon);
+
+    const crossesLand =
+      routeCrossesLand(from.lat, from.lon, to.lat, to.lon) ||
+      isPointOnLand(from.lat, from.lon, 0.02) ||
+      isPointOnLand(to.lat, to.lon, 0.02);
 
     let weather: WeatherData | null = null;
     if (weatherEnabled) {
@@ -354,6 +373,12 @@ async function evaluateChromosome(
     totalCO2 += segment.co2Emitted;
     totalDistance += distance;
     totalDuration += segment.duration;
+
+    // Kara geçişi varsa ciddi bir ceza ekle
+    if (crossesLand) {
+      // Toplam yakıta ek maliyet olarak ele al
+      landPenalty += distance * 1000;
+    }
   }
 
   chromosome.totalFuel = totalFuel;
@@ -363,7 +388,7 @@ async function evaluateChromosome(
 
   // Fitness fonksiyonu: Yakıt tüketimini minimize et
   // Daha düşük yakıt = daha yüksek fitness
-  chromosome.fitness = 1000 / (totalFuel + 1);
+  chromosome.fitness = 1000 / (totalFuel + landPenalty + 1);
 }
 
 /**
@@ -447,7 +472,26 @@ function mutate(
       attempts++;
       continue;
     }
-    
+
+    const prevPoint =
+      mutationIndex === 0
+        ? { lat: startLat, lon: startLon }
+        : mutatedWaypoints[mutationIndex - 1];
+    const nextPoint =
+      mutationIndex === mutatedWaypoints.length - 1
+        ? { lat: endLat, lon: endLon }
+        : mutatedWaypoints[mutationIndex + 1];
+
+    if (
+      routeCrossesLand(prevPoint.lat, prevPoint.lon, newPoint.lat, newPoint.lon) ||
+      routeCrossesLand(newPoint.lat, newPoint.lon, nextPoint.lat, nextPoint.lon)
+    ) {
+      const retryBearing = bearing + (Math.random() - 0.5) * 80;
+      newPoint = calculateDestinationPoint(startLat, startLon, randomDistance, retryBearing);
+      attempts++;
+      continue;
+    }
+
     if (avoidShallowWater) {
       const depth = checkDepth(newPoint.lat, newPoint.lon);
       if (depth >= minDepth) {
@@ -456,7 +500,11 @@ function mutate(
       const retryBearing = bearing + (Math.random() - 0.5) * 80;
       newPoint = calculateDestinationPoint(startLat, startLon, randomDistance, retryBearing);
       attempts++;
+      continue;
     }
+
+    // Uygun bir nokta bulundu
+    break;
   }
 
   mutatedWaypoints[mutationIndex] = newPoint;
