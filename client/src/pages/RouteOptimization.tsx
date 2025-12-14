@@ -9,14 +9,7 @@ import { toast } from "sonner";
 import { Loader2, Ship, Navigation as NavigationIcon, TrendingDown, MapPin, Activity } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { MapView } from "@/components/Map";
-
-type PortOption = {
-  name: string;
-  country: string;
-  code: string;
-  latitude: number;
-  longitude: number;
-};
+import { STATIC_PORTS, type PortOption } from "@/data/ports";
 
 type PortSelectorProps = {
   label: string;
@@ -26,8 +19,6 @@ type PortSelectorProps = {
   onPortChange: (port: PortOption) => void;
   countries: string[];
   portsByCountry: Record<string, PortOption[]>;
-  loading?: boolean;
-  error?: string | null;
 };
 
 function PortSelector({
@@ -38,28 +29,16 @@ function PortSelector({
   onPortChange,
   countries,
   portsByCountry,
-  loading,
-  error,
 }: PortSelectorProps) {
   const countryPorts = selectedCountry ? portsByCountry[selectedCountry] ?? [] : [];
 
-  const countryPlaceholder = loading
-    ? "Ülkeler yükleniyor..."
-    : error
-      ? "Ülke verisi alınamadı"
-      : countries.length > 0
-        ? "Ülke seçin"
-        : "Ülke bulunamadı";
+  const countryPlaceholder = countries.length > 0 ? "Ülke seçin" : "Ülke bulunamadı";
 
   const portPlaceholder = !selectedCountry
     ? "Önce ülke seçin"
-    : loading
-      ? "Limanlar yükleniyor..."
-      : error
-        ? "Limanlar alınamadı"
-        : countryPorts.length > 0
-          ? "Şehir/Liman seçin"
-          : "Bu ülkeye ait liman yok";
+    : countryPorts.length > 0
+      ? "Şehir/Liman seçin"
+      : "Bu ülkeye ait liman yok";
 
   return (
     <div className="space-y-2">
@@ -79,16 +58,7 @@ function PortSelector({
             <SelectValue placeholder={countryPlaceholder} />
           </SelectTrigger>
           <SelectContent>
-            {loading ? (
-              <SelectItem value="loading" disabled className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Ülkeler yükleniyor...
-              </SelectItem>
-            ) : error ? (
-              <SelectItem value="error" disabled>
-                Ülke verisi alınamadı
-              </SelectItem>
-            ) : countries.length > 0 ? (
+            {countries.length > 0 ? (
               countries.map((country) => (
                 <SelectItem key={country} value={country}>
                   {country}
@@ -118,15 +88,6 @@ function PortSelector({
             {!selectedCountry ? (
               <SelectItem value="select-country" disabled>
                 Önce ülke seçin
-              </SelectItem>
-            ) : loading ? (
-              <SelectItem value="loading" disabled className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Limanlar yükleniyor...
-              </SelectItem>
-            ) : error ? (
-              <SelectItem value="error" disabled>
-                Liman verisi alınamadı
               </SelectItem>
             ) : countryPorts.length > 0 ? (
               countryPorts.map((port) => (
@@ -177,22 +138,8 @@ export default function RouteOptimization() {
 
   const { data: vessels, isLoading: vesselsLoading } = trpc.vessels.list.useQuery();
   const { data: routes } = trpc.routes.list.useQuery();
-  const {
-    data: ports,
-    isLoading: portsLoading,
-    isFetching: portsFetching,
-    error: portsError,
-  } = trpc.ports.list.useQuery(
-    { limit: 1000 },
-    {
-      retry: 1,
-      onError: (err) => {
-        toast.error(`Liman verisi alınamadı: ${err.message}`);
-      },
-    },
-  );
 
-  const isPortsLoading = portsLoading || portsFetching;
+  const ports = STATIC_PORTS;
 
   const portsByCountry = useMemo(() => {
     const grouped: Record<string, PortOption[]> = {};
@@ -508,16 +455,14 @@ export default function RouteOptimization() {
 
               {/* Başlangıç Noktası */}
               <div className="space-y-3">
-                <PortSelector
-                  label="Başlangıç Limanı"
-                  selectedCountry={startCountry}
-                  selectedPortCode={startPortCode}
+              <PortSelector
+                label="Başlangıç Limanı"
+                selectedCountry={startCountry}
+                selectedPortCode={startPortCode}
               onCountryChange={(country) => handleCountryChange(country, "start")}
               onPortChange={(port) => handlePortSelect(port, "start")}
               countries={countries}
               portsByCountry={portsByCountry}
-              loading={isPortsLoading}
-              error={portsError?.message ?? null}
             />
 
                 <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100 text-sm text-emerald-900">
@@ -535,16 +480,14 @@ export default function RouteOptimization() {
 
               {/* Varış Noktası */}
               <div className="space-y-3">
-                <PortSelector
-                  label="Varış Limanı"
-                  selectedCountry={endCountry}
-                  selectedPortCode={endPortCode}
+              <PortSelector
+                label="Varış Limanı"
+                selectedCountry={endCountry}
+                selectedPortCode={endPortCode}
               onCountryChange={(country) => handleCountryChange(country, "end")}
               onPortChange={(port) => handlePortSelect(port, "end")}
               countries={countries}
               portsByCountry={portsByCountry}
-              loading={isPortsLoading}
-              error={portsError?.message ?? null}
             />
 
                 <div className="p-3 rounded-lg bg-rose-50 border border-rose-100 text-sm text-rose-900">
