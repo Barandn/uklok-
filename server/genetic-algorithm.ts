@@ -264,6 +264,20 @@ export async function runGeneticOptimization(params: GeneticParams): Promise<Gen
     minDepth,
   } = params;
 
+  // PRE-FETCH: Load real bathymetry data for route bounds
+  // This populates the cache with NOAA ETOPO 2022 depth data
+  // Significantly improves performance during waypoint generation and validation
+  if (avoidShallowWater && minDepth > 0) {
+    try {
+      console.log('[GeneticAlgorithm] Pre-fetching bathymetry data for route bounds...');
+      const { prefetchRouteDepths } = await import('./bathymetry');
+      await prefetchRouteDepths(startLat, startLon, endLat, endLon, 0.25);
+      console.log('[GeneticAlgorithm] Bathymetry pre-fetch completed');
+    } catch (error) {
+      console.warn('[GeneticAlgorithm] Bathymetry pre-fetch failed, using fallback:', error);
+    }
+  }
+
   // İlk popülasyonu oluştur
   let population = await initializePopulation(
     startLat,
