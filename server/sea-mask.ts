@@ -220,3 +220,79 @@ function distanceBetween(a: GridPoint, b: GridPoint): number {
   return calculateGreatCircleDistance(pointA.lat, pointA.lon, pointB.lat, pointB.lon);
 }
 
+/**
+ * Check if a point is in navigable sea water
+ * Uses the ocean mask grid - more reliable than coastline proximity
+ * @returns true if point is in sea, false if on land or outside grid
+ */
+export function isPointInSea(lat: number, lon: number): boolean {
+  const cell = latLonToCell(lat, lon);
+  if (!cell) return false; // Outside grid bounds
+  return isSeaCell(cell);
+}
+
+/**
+ * Check if a line segment crosses land
+ * Samples points along the segment and checks each one
+ * @param samples Number of points to check (default 20)
+ * @returns true if segment crosses land
+ */
+export function segmentCrossesLand(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+  samples: number = 20
+): boolean {
+  // Check endpoints first
+  if (!isPointInSea(lat1, lon1) || !isPointInSea(lat2, lon2)) {
+    return true;
+  }
+
+  // Sample points along the segment
+  for (let i = 1; i < samples; i++) {
+    const t = i / samples;
+    const lat = lat1 + t * (lat2 - lat1);
+    const lon = lon1 + t * (lon2 - lon1);
+
+    if (!isPointInSea(lat, lon)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Validate entire route - all waypoints must be in sea
+ * and no segment should cross land
+ */
+export function validateSeaRoute(
+  waypoints: Array<{ lat: number; lon: number }>
+): { valid: boolean; landPoints: number[]; landSegments: number[] } {
+  const landPoints: number[] = [];
+  const landSegments: number[] = [];
+
+  // Check all waypoints
+  for (let i = 0; i < waypoints.length; i++) {
+    if (!isPointInSea(waypoints[i].lat, waypoints[i].lon)) {
+      landPoints.push(i);
+    }
+  }
+
+  // Check all segments
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const from = waypoints[i];
+    const to = waypoints[i + 1];
+    if (segmentCrossesLand(from.lat, from.lon, to.lat, to.lon, 25)) {
+      landSegments.push(i);
+    }
+  }
+
+  return {
+    valid: landPoints.length === 0 && landSegments.length === 0,
+    landPoints,
+    landSegments
+  };
+}
+
