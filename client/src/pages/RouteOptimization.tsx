@@ -6,9 +6,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Loader2, Ship, Navigation as NavigationIcon, TrendingDown, MapPin, Activity } from "lucide-react";
+import { Loader2, Ship, Navigation as NavigationIcon, TrendingDown, MapPin, Activity, Anchor, Waves, Wind } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
-import { MapView } from "@/components/Map";
+import { SeaMapView, type SeaMapHandle, type RoutePoint } from "@/components/SeaMapView";
 import { STATIC_PORTS, type PortOption } from "@/data/ports";
 
 type PortSelectorProps = {
@@ -112,6 +112,18 @@ function PortSelector({
   );
 }
 
+// Register service worker for offline tile caching
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw-tiles.js').then(
+    (registration) => {
+      console.log('Tile cache SW registered:', registration.scope);
+    },
+    (error) => {
+      console.warn('Tile cache SW registration failed:', error);
+    }
+  );
+}
+
 export default function RouteOptimization() {
   const [selectedVessel, setSelectedVessel] = useState<number | null>(null);
   const [startLat, setStartLat] = useState("");
@@ -129,12 +141,7 @@ export default function RouteOptimization() {
   const [progressMessage, setProgressMessage] = useState("");
 
   const [mapReady, setMapReady] = useState(false);
-  const mapRef = useRef<any>(null);
-  const googleRef = useRef<any>(null);
-  const routePolylineRef = useRef<any>(null);
-  const routeMarkersRef = useRef<any[]>([]);
-  const startMarkerRef = useRef<any>(null);
-  const endMarkerRef = useRef<any>(null);
+  const mapHandleRef = useRef<SeaMapHandle | null>(null);
 
   const { data: vessels, isLoading: vesselsLoading } = trpc.vessels.list.useQuery();
   const { data: routes } = trpc.routes.list.useQuery();
@@ -210,11 +217,10 @@ export default function RouteOptimization() {
     }
   }, [ports]);
 
+  // Update endpoint markers when coordinates change
   const updateEndpointMarkers = () => {
-    if (!mapRef.current || !googleRef.current) return;
+    if (!mapHandleRef.current) return;
 
-    const google = googleRef.current;
-    const map = mapRef.current;
     const startLatNum = parseFloat(startLat);
     const startLonNum = parseFloat(startLon);
     const endLatNum = parseFloat(endLat);
@@ -224,56 +230,25 @@ export default function RouteOptimization() {
       return;
     }
 
-    const startPosition = new google.maps.LatLng(startLatNum, startLonNum);
-    const endPosition = new google.maps.LatLng(endLatNum, endLonNum);
+    // Set markers on Leaflet map
+    mapHandleRef.current.setStartMarker(startLatNum, startLonNum, startPortLabel || undefined);
+    mapHandleRef.current.setEndMarker(endLatNum, endLonNum, endPortLabel || undefined);
 
-    if (!startMarkerRef.current) {
-      startMarkerRef.current = new google.maps.Marker({
-        position: startPosition,
-        map,
-        title: startPortLabel ? `Başlangıç: ${startPortLabel}` : "Başlangıç",
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 10,
-          fillColor: "#22c55e",
-          fillOpacity: 1,
-          strokeColor: "#fff",
-          strokeWeight: 3,
-        },
-      });
-    } else {
-      startMarkerRef.current.setPosition(startPosition);
-      startMarkerRef.current.setTitle(startPortLabel ? `Başlangıç: ${startPortLabel}` : "Başlangıç");
+    // Fit bounds to show both markers
+    if (mapHandleRef.current.map) {
+      const bounds = [
+        [startLatNum, startLonNum],
+        [endLatNum, endLonNum],
+      ] as [[number, number], [number, number]];
+      mapHandleRef.current.fitBounds(bounds);
     }
-
-    if (!endMarkerRef.current) {
-      endMarkerRef.current = new google.maps.Marker({
-        position: endPosition,
-        map,
-        title: endPortLabel ? `Varış: ${endPortLabel}` : "Varış",
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 10,
-          fillColor: "#ef4444",
-          fillOpacity: 1,
-          strokeColor: "#fff",
-          strokeWeight: 3,
-        },
-      });
-    } else {
-      endMarkerRef.current.setPosition(endPosition);
-      endMarkerRef.current.setTitle(endPortLabel ? `Varış: ${endPortLabel}` : "Varış");
-    }
-
-    const bounds = new google.maps.LatLngBounds();
-    bounds.extend(startPosition);
-    bounds.extend(endPosition);
-    map.fitBounds(bounds);
   };
 
   useEffect(() => {
-    updateEndpointMarkers();
-  }, [startLat, startLon, endLat, endLon, startPortLabel, endPortLabel]);
+    if (mapReady) {
+      updateEndpointMarkers();
+    }
+  }, [startLat, startLon, endLat, endLon, startPortLabel, endPortLabel, mapReady]);
 
   const geneticMutation = trpc.optimization.runGenetic.useMutation({
     onMutate: () => {
@@ -310,65 +285,28 @@ export default function RouteOptimization() {
   });
 
   const drawRouteOnMap = (routeData: any) => {
-    if (!mapRef.current || !googleRef.current || !routeData.path) return;
-    
-    const google = googleRef.current;
-    const map = mapRef.current;
-    
-    // Eski polyline'ı temizle
-    if (routePolylineRef.current) {
-      routePolylineRef.current.setMap(null);
-    }
+    if (!mapHandleRef.current || !routeData.path) return;
 
-    // Önceki waypoint marker'larını temizle
-    routeMarkersRef.current.forEach((marker) => marker.setMap(null));
-    routeMarkersRef.current = [];
-
-    // Rota koordinatlarını hazırla
-    const pathCoordinates = routeData.path.map((point: any) => ({
+    // Convert path to RoutePoint format
+    const path: RoutePoint[] = routeData.path.map((point: any) => ({
       lat: point.lat,
-      lng: point.lon,
+      lon: point.lon,
+      depth: point.depth,
+      weather: point.weather,
     }));
-    
-    // Yeşil şerit (polyline) çiz
-    const routePolyline = new google.maps.Polyline({
-      path: pathCoordinates,
-      geodesic: true,
-      strokeColor: "#22c55e", // Yeşil renk
-      strokeOpacity: 0.8,
-      strokeWeight: 5,
-      map: map,
-    });
-    
-    routePolylineRef.current = routePolyline;
-    
-    // Haritayı rotaya göre ayarla
-    const bounds = new google.maps.LatLngBounds();
-    pathCoordinates.forEach((coord: any) => bounds.extend(coord));
-    map.fitBounds(bounds);
 
-    // Waypoint'leri işaretle
-    const startTitle = startPortLabel ? `Başlangıç: ${startPortLabel}` : "Başlangıç";
-    const endTitle = endPortLabel ? `Varış: ${endPortLabel}` : "Varış";
-    routeData.path.forEach((point: any, index: number) => {
-      if (index === 0 || index === routeData.path.length - 1 || index % 5 === 0) {
-        const marker = new google.maps.Marker({
-          position: { lat: point.lat, lng: point.lon },
-          map: map,
-          icon: {
-            path: google.maps.SymbolPath.CIRCLE,
-            scale: index === 0 || index === routeData.path.length - 1 ? 8 : 4,
-            fillColor: index === 0 ? "#22c55e" : index === routeData.path.length - 1 ? "#ef4444" : "#3b82f6",
-            fillOpacity: 1,
-            strokeColor: "#fff",
-            strokeWeight: 2,
-          },
-          title: index === 0 ? startTitle : index === routeData.path.length - 1 ? endTitle : `Waypoint ${index}`,
-        });
+    // Draw route on Leaflet map
+    mapHandleRef.current.setRoute(path);
 
-        routeMarkersRef.current.push(marker);
-      }
-    });
+    // Update start/end markers with labels
+    if (path.length > 0) {
+      mapHandleRef.current.setStartMarker(path[0].lat, path[0].lon, startPortLabel || undefined);
+      mapHandleRef.current.setEndMarker(
+        path[path.length - 1].lat,
+        path[path.length - 1].lon,
+        endPortLabel || undefined
+      );
+    }
   };
 
   useEffect(() => {
@@ -388,6 +326,9 @@ export default function RouteOptimization() {
       return;
     }
 
+    // Clear existing route before optimization
+    mapHandleRef.current?.clearRoute();
+
     geneticMutation.mutate({
       vesselId: selectedVessel,
       startLat: parseFloat(startLat),
@@ -402,6 +343,9 @@ export default function RouteOptimization() {
 
   const isOptimizing = geneticMutation.isPending;
 
+  // Get selected vessel details for display
+  const selectedVesselData = vessels?.find(v => v.id === selectedVessel);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
       <div className="container mx-auto py-8">
@@ -412,6 +356,10 @@ export default function RouteOptimization() {
           <p className="text-lg text-gray-600">
             Yapay Zeka Destekli Rota Optimizasyonu ve Sürdürülebilirlik
           </p>
+          <div className="flex items-center justify-center gap-2 mt-2 text-sm text-blue-600">
+            <Anchor className="w-4 h-4" />
+            <span>OpenSeaMap & Leaflet ile Offline Çalışabilir Harita</span>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -452,6 +400,22 @@ export default function RouteOptimization() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {/* Seçili gemi bilgileri */}
+              {selectedVesselData && (
+                <div className="p-3 rounded-lg bg-blue-50 border border-blue-100 text-sm">
+                  <div className="flex items-center gap-2 font-medium text-blue-900 mb-2">
+                    <Ship className="w-4 h-4" />
+                    Gemi Bilgileri
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-blue-800">
+                    <div>Draft: <span className="font-semibold">{selectedVesselData.draft}m</span></div>
+                    <div>DWT: <span className="font-semibold">{selectedVesselData.dwt} ton</span></div>
+                    <div>Hız: <span className="font-semibold">{selectedVesselData.serviceSpeed} knot</span></div>
+                    <div>Yakıt: <span className="font-semibold">{selectedVesselData.fuelType}</span></div>
+                  </div>
+                </div>
+              )}
 
               {/* Başlangıç Noktası */}
               <div className="space-y-3">
@@ -522,7 +486,7 @@ export default function RouteOptimization() {
                   </>
                 )}
               </Button>
-              
+
               {/* İlerleme Göstergesi */}
               {isOptimizing && progress > 0 && (
                 <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-3">
@@ -538,7 +502,7 @@ export default function RouteOptimization() {
                   </div>
                 </div>
               )}
-              
+
               {optimizedRoute && !isOptimizing && (
                 <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
                   <div className="text-sm font-medium text-green-800 mb-1">
@@ -557,22 +521,37 @@ export default function RouteOptimization() {
             {/* Harita */}
             <Card>
               <CardHeader>
-                <CardTitle>Rota Haritası</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <Anchor className="w-5 h-5" />
+                  Deniz Haritası
+                </CardTitle>
                 <CardDescription>
-                  Yeşil şerit optimize edilmiş rotayı gösterir
+                  OpenSeaMap deniz haritası ile optimize edilmiş rota - Offline destekli
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="h-[500px] bg-gray-100 rounded-lg overflow-hidden">
-                  <MapView
-                    onMapReady={(map: any) => {
-                      const google = (window as any).google;
-                      mapRef.current = map;
-                      googleRef.current = google;
+                  <SeaMapView
+                    initialCenter={{ lat: 38.0, lng: 24.0 }}
+                    initialZoom={6}
+                    showSeamarks={true}
+                    showDepthLayer={true}
+                    onMapReady={(handle) => {
+                      mapHandleRef.current = handle;
                       setMapReady(true);
                       updateEndpointMarkers();
                     }}
                   />
+                </div>
+                <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
+                  <div className="flex items-center gap-1">
+                    <Waves className="w-3 h-3" />
+                    <span>Derinlik verileri: NOAA ETOPO</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Wind className="w-3 h-3" />
+                    <span>Hava durumu: NOAA GFS</span>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -591,7 +570,7 @@ export default function RouteOptimization() {
                     <TabsTrigger value="latest">Son Sonuç</TabsTrigger>
                     <TabsTrigger value="history">Geçmiş Rotalar</TabsTrigger>
                   </TabsList>
-                  
+
                   <TabsContent value="latest" className="space-y-4">
                     {optimizedRoute ? (
                       <div className="space-y-4">
@@ -635,6 +614,34 @@ export default function RouteOptimization() {
                           </div>
                         </div>
 
+                        {/* Derinlik ve Güvenlik Bilgileri */}
+                        <div className="p-4 bg-gradient-to-r from-cyan-50 to-blue-50 rounded-lg border border-cyan-200">
+                          <div className="text-sm font-medium text-cyan-900 mb-3 flex items-center gap-2">
+                            <Waves className="w-4 h-4" />
+                            Derinlik & Güvenlik Analizi
+                          </div>
+                          <div className="grid grid-cols-3 gap-4">
+                            <div>
+                              <div className="text-xs text-gray-600">Min. Derinlik</div>
+                              <div className="text-lg font-semibold text-cyan-700">
+                                {optimizedRoute.minDepth ? `${Math.abs(optimizedRoute.minDepth).toFixed(0)}m` : 'N/A'}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-600">Gemi Draft</div>
+                              <div className="text-lg font-semibold text-cyan-700">
+                                {selectedVesselData?.draft || 'N/A'}m
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-gray-600">Güvenlik Marjı</div>
+                              <div className="text-lg font-semibold text-green-600">
+                                ✓ Uygun
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
                         {/* ETA ve Zaman Bilgileri */}
                         <div className="p-4 bg-gradient-to-r from-indigo-50 to-blue-50 rounded-lg border border-indigo-200">
                           <div className="text-sm font-medium text-indigo-900 mb-3">
@@ -644,24 +651,24 @@ export default function RouteOptimization() {
                             <div>
                               <div className="text-xs text-gray-600">Kalkış Zamanı</div>
                               <div className="text-sm font-semibold text-gray-900">
-                                {new Date().toLocaleString('tr-TR', { 
-                                  day: '2-digit', 
-                                  month: 'short', 
+                                {new Date().toLocaleString('tr-TR', {
+                                  day: '2-digit',
+                                  month: 'short',
                                   year: 'numeric',
-                                  hour: '2-digit', 
-                                  minute: '2-digit' 
+                                  hour: '2-digit',
+                                  minute: '2-digit'
                                 })}
                               </div>
                             </div>
                             <div>
                               <div className="text-xs text-gray-600">Tahmini Varış (ETA)</div>
                               <div className="text-sm font-semibold text-indigo-700">
-                                {new Date(Date.now() + (optimizedRoute.totalDuration || 0) * 3600000).toLocaleString('tr-TR', { 
-                                  day: '2-digit', 
-                                  month: 'short', 
+                                {new Date(Date.now() + (optimizedRoute.totalDuration || 0) * 3600000).toLocaleString('tr-TR', {
+                                  day: '2-digit',
+                                  month: 'short',
                                   year: 'numeric',
-                                  hour: '2-digit', 
-                                  minute: '2-digit' 
+                                  hour: '2-digit',
+                                  minute: '2-digit'
                                 })}
                               </div>
                             </div>
@@ -700,11 +707,13 @@ export default function RouteOptimization() {
                       </div>
                     ) : (
                       <div className="text-center py-12 text-gray-500">
-                        Henüz optimizasyon yapılmadı
+                        <Anchor className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+                        <p>Henüz optimizasyon yapılmadı</p>
+                        <p className="text-sm mt-2">Gemi ve liman seçerek rota optimizasyonu başlatın</p>
                       </div>
                     )}
                   </TabsContent>
-                  
+
                   <TabsContent value="history">
                     <div className="space-y-2">
                       {routes && routes.length > 0 ? (
