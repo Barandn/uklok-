@@ -220,16 +220,18 @@ class TileCache {
 // Custom tile layer with caching
 class CachedTileLayer extends L.TileLayer {
   private cache: TileCache;
+  private urlTemplate: string;
 
   constructor(urlTemplate: string, options?: L.TileLayerOptions) {
     super(urlTemplate, options);
     this.cache = new TileCache();
+    this.urlTemplate = urlTemplate;
   }
 
   createTile(coords: L.Coords, done: L.DoneCallback): HTMLElement {
     const tile = document.createElement('img');
     const url = this.getTileUrl(coords);
-    const cacheKey = `${coords.z}-${coords.x}-${coords.y}-${this._url}`;
+    const cacheKey = `${coords.z}-${coords.x}-${coords.y}-${this.urlTemplate}`;
 
     // Try to load from cache first
     this.cache.getTile(cacheKey).then(async (cachedBlob) => {
