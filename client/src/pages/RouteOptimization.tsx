@@ -208,7 +208,7 @@ export default function RouteOptimization() {
         handlePortSelect(defaultEnd, "end");
       }
     }
-  }, [ports, startPortCode, endPortCode]);
+  }, [ports]);
 
   const updateEndpointMarkers = () => {
     if (!mapRef.current || !googleRef.current) return;
