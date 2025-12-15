@@ -226,10 +226,30 @@ export async function fetchWeatherAlongRoute(
 }
 
 /**
- * Batimetri kontrolü - sığ su tespiti
- * Basit bir implementasyon - gerçek GEBCO verisi için ayrı servis gerekli
+ * Batimetri kontrolü - GERÇEK derinlik verisi
+ * Uses NOAA ERDDAP ETOPO 2022 data via bathymetry module
+ *
+ * NOTE: This is a synchronous wrapper that reads from cache.
+ * For best performance, call prefetchRouteDepths() before route optimization.
+ * If data not in cache, returns fallback estimation.
  */
 export function checkDepth(lat: number, lon: number): number {
+  // Try to get real depth from cache (via bathymetry module)
+  try {
+    const { checkDepthSync } = require('./bathymetry');
+    return checkDepthSync(lat, lon);
+  } catch (error) {
+    // Fallback to old estimation if bathymetry module fails
+    console.warn('[Weather] Bathymetry module unavailable, using fallback');
+    return checkDepthFallback(lat, lon);
+  }
+}
+
+/**
+ * Fallback depth estimation (used when real data unavailable)
+ * Based on distance to coastline
+ */
+function checkDepthFallback(lat: number, lon: number): number {
   // Kara kontrolü - coastline verisi ile
   if (isCoastlinePointOnLand(lat, lon, 0.01)) {
     return 0; // Kara
