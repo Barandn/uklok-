@@ -7,6 +7,7 @@
 import { DigitalTwin, calculateGreatCircleDistance, calculateBearing, calculateDestinationPoint } from "./vessel-performance";
 import { WeatherData, fetchCombinedWeather, checkDepth } from "./weather";
 import { isPointOnLand, routeCrossesLand } from './coastline';
+import { isPointInSea, segmentCrossesLand as seaMaskSegmentCrossesLand, validateSeaRoute, findOceanPath } from './sea-mask';
 
 /**
  * Maximum attempts for resampling waypoints when validation fails
@@ -19,7 +20,23 @@ const MAX_RESAMPLE_ATTEMPTS = 30;
 const SEGMENT_SAMPLE_POINTS = 15;
 
 /**
+ * Check if a point is definitely in sea (both coastline and sea-mask agree)
+ * Uses DUAL validation for maximum safety
+ */
+function isDefinitelyInSea(lat: number, lon: number): boolean {
+  // Method 1: Sea mask grid check (reliable for open water)
+  const inSeaMask = isPointInSea(lat, lon);
+
+  // Method 2: Coastline proximity check (reliable for coastal areas)
+  const nearCoast = isPointOnLand(lat, lon, 0.05); // 5km buffer
+
+  // Point must be in sea mask AND not too close to coastline
+  return inSeaMask && !nearCoast;
+}
+
+/**
  * Check if a segment between two points is valid (no land crossing, adequate depth)
+ * Uses DUAL validation - both coastline intersection AND sea-mask grid
  * @param from Start point
  * @param to End point
  * @param minDepth Minimum required depth (ship's draft)
@@ -32,8 +49,18 @@ function isSegmentValid(
   minDepth: number,
   checkShallowWater: boolean
 ): boolean {
-  // Check if segment crosses land
+  // Check 1: Coastline intersection (detects crossing shoreline)
   if (routeCrossesLand(from.lat, from.lon, to.lat, to.lon, SEGMENT_SAMPLE_POINTS)) {
+    return false;
+  }
+
+  // Check 2: Sea mask validation (detects land interior points)
+  if (seaMaskSegmentCrossesLand(from.lat, from.lon, to.lat, to.lon, SEGMENT_SAMPLE_POINTS)) {
+    return false;
+  }
+
+  // Check 3: Endpoint validation
+  if (!isDefinitelyInSea(from.lat, from.lon) || !isDefinitelyInSea(to.lat, to.lon)) {
     return false;
   }
 
@@ -371,11 +398,17 @@ export async function runGeneticOptimization(params: GeneticParams): Promise<Gen
   ];
 
   // FINAL VALIDATION: Ensure no segment crosses land
-  // If any segment crosses land, try to fix it by adding intermediate waypoints
+  // Use DUAL validation - both coastline and sea-mask
   const validation = validateRoute(finalPath, minDepth, avoidShallowWater);
+  const seaMaskValidation = validateSeaRoute(finalPath);
 
-  if (!validation.valid) {
-    console.log(`[GeneticAlgorithm] Final route has ${validation.invalidSegments.length} invalid segments. Attempting to fix...`);
+  const hasLandIssues = !validation.valid || !seaMaskValidation.valid;
+
+  if (hasLandIssues) {
+    console.log(`[GeneticAlgorithm] Final route has land crossing issues.`);
+    console.log(`  - Coastline validation: ${validation.invalidSegments.length} invalid segments`);
+    console.log(`  - Sea-mask validation: ${seaMaskValidation.landPoints.length} land points, ${seaMaskValidation.landSegments.length} land segments`);
+    console.log(`[GeneticAlgorithm] Attempting to fix with intermediate waypoints...`);
 
     // Fix invalid segments by inserting sea-valid intermediate waypoints
     const fixedPath: Array<{ lat: number; lon: number }> = [finalPath[0]];
@@ -384,7 +417,10 @@ export async function runGeneticOptimization(params: GeneticParams): Promise<Gen
       const from = finalPath[i];
       const to = finalPath[i + 1];
 
-      if (validation.invalidSegments.includes(i)) {
+      const segmentInvalid = validation.invalidSegments.includes(i) ||
+                             seaMaskValidation.landSegments.includes(i);
+
+      if (segmentInvalid) {
         // This segment crosses land - find alternative path
         const intermediatePts = findSeaValidPath(from, to, minDepth, avoidShallowWater);
         fixedPath.push(...intermediatePts);
@@ -395,10 +431,70 @@ export async function runGeneticOptimization(params: GeneticParams): Promise<Gen
 
     finalPath = fixedPath;
 
-    // Re-validate the fixed path
+    // Re-validate the fixed path with both methods
     const revalidation = validateRoute(finalPath, minDepth, avoidShallowWater);
-    if (!revalidation.valid) {
-      console.warn(`[GeneticAlgorithm] Could not fully fix route. ${revalidation.invalidSegments.length} segments still invalid.`);
+    const reSeaMaskValidation = validateSeaRoute(finalPath);
+
+    if (!revalidation.valid || !reSeaMaskValidation.valid) {
+      console.warn(`[GeneticAlgorithm] Could not fix GA route. Using A* ocean path as fallback.`);
+
+      // FALLBACK: Use A* algorithm on sea-mask grid
+      const astarResult = findOceanPath(startLat, startLon, endLat, endLon);
+
+      if (astarResult.success && astarResult.path.length > 0) {
+        console.log(`[GeneticAlgorithm] A* fallback successful: ${astarResult.path.length} waypoints`);
+        finalPath = astarResult.path;
+
+        // Recalculate metrics for A* path
+        let totalDistance = 0;
+        for (let i = 0; i < finalPath.length - 1; i++) {
+          totalDistance += calculateGreatCircleDistance(
+            finalPath[i].lat, finalPath[i].lon,
+            finalPath[i + 1].lat, finalPath[i + 1].lon
+          );
+        }
+
+        const avgSpeed = vessel.vessel.serviceSpeed;
+        const totalDuration = totalDistance / avgSpeed;
+        const fuelRate = vessel.vessel.fuelConsumptionRate / 24;
+        const totalFuel = totalDuration * fuelRate;
+        const totalCO2 = totalFuel * 3.114;
+
+        return {
+          success: true,
+          path: finalPath,
+          totalDistance,
+          totalFuel,
+          totalCO2,
+          totalDuration,
+          generations,
+          bestFitness: 0, // A* doesn't have fitness
+          message: 'A* fallback used - guaranteed sea-only route',
+        };
+      } else {
+        console.error(`[GeneticAlgorithm] A* fallback also failed!`);
+        return {
+          success: false,
+          path: [],
+          totalDistance: 0,
+          totalFuel: 0,
+          totalCO2: 0,
+          totalDuration: 0,
+          generations,
+          bestFitness: 0,
+          message: 'Could not find valid sea-only route',
+        };
+      }
+    }
+  }
+
+  // Final verification - one last check
+  const finalSeaCheck = validateSeaRoute(finalPath);
+  if (!finalSeaCheck.valid) {
+    console.warn(`[GeneticAlgorithm] Final route still has issues, using A* fallback`);
+    const astarResult = findOceanPath(startLat, startLon, endLat, endLon);
+    if (astarResult.success) {
+      finalPath = astarResult.path;
     }
   }
 
@@ -498,8 +594,15 @@ function generateRandomWaypoints(
 
       const candidate = calculateDestinationPoint(startLat, startLon, randomDistance, randomBearing);
 
-      // Kara kontrolü - gerçek coastline verisi kullan
-      if (isPointOnLand(candidate.lat, candidate.lon, 0.03)) {
+      // DUAL VALIDATION: Both coastline AND sea-mask must agree point is in sea
+      // Check 1: Sea mask validation (most reliable for open water)
+      if (!isPointInSea(candidate.lat, candidate.lon)) {
+        attempts++;
+        continue;
+      }
+
+      // Check 2: Coastline proximity (avoid coastal areas)
+      if (isPointOnLand(candidate.lat, candidate.lon, 0.05)) {
         attempts++;
         continue;
       }
