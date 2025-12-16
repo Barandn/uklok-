@@ -144,7 +144,6 @@ export default function RouteOptimization() {
   const mapHandleRef = useRef<SeaMapHandle | null>(null);
 
   const { data: vessels, isLoading: vesselsLoading } = trpc.vessels.list.useQuery();
-  const { data: routes } = trpc.routes.list.useQuery();
 
   const ports = STATIC_PORTS;
 
@@ -316,7 +315,7 @@ export default function RouteOptimization() {
   }, [mapReady, optimizedRoute]);
 
   const handleOptimize = () => {
-    if (!selectedVessel) {
+    if (!selectedVessel || !selectedVesselData) {
       toast.error("Lütfen bir gemi seçin");
       return;
     }
@@ -329,15 +328,27 @@ export default function RouteOptimization() {
     // Clear existing route before optimization
     mapHandleRef.current?.clearRoute();
 
+    // Gemi bilgilerini doğrudan gönder (DB'ye kaydetmeden anlık hesaplama)
     geneticMutation.mutate({
-      vesselId: selectedVessel,
       startLat: parseFloat(startLat),
       startLon: parseFloat(startLon),
       endLat: parseFloat(endLat),
       endLon: parseFloat(endLon),
+      vessel: {
+        name: selectedVesselData.name,
+        vesselType: selectedVesselData.vesselType,
+        dwt: selectedVesselData.dwt,
+        length: selectedVesselData.length || 200,
+        beam: selectedVesselData.beam || 30,
+        draft: selectedVesselData.draft || 10,
+        serviceSpeed: selectedVesselData.serviceSpeed,
+        fuelType: selectedVesselData.fuelType as "HFO" | "LFO" | "MGO" | "MDO" | "LNG" | "Methanol",
+        fuelConsumptionRate: selectedVesselData.fuelConsumptionRate || 50,
+        enginePower: selectedVesselData.enginePower || 10000,
+      },
       populationSize: 20,
       generations: 15,
-      weatherEnabled: true,
+      weatherEnabled: false, // Daha hızlı hesaplama için kapalı
     });
   };
 
@@ -716,32 +727,16 @@ export default function RouteOptimization() {
 
                   <TabsContent value="history">
                     <div className="space-y-2">
-                      {routes && routes.length > 0 ? (
-                        routes.slice(0, 5).map((route) => (
-                          <div key={route.id} className="p-3 border rounded-lg hover:bg-gray-50">
-                            <div className="flex justify-between items-center">
-                              <div>
-                                <div className="font-medium">{route.name}</div>
-                                <div className="text-sm text-gray-500">
-                                  {route.algorithm} - {route.totalDistance} nm
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <div className="text-sm font-medium">
-                                  {(route.totalFuelConsumption || 0) / 100} ton
-                                </div>
-                                <div className="text-xs text-gray-500">
-                                  CO₂: {(route.totalCO2Emission || 0) / 100} ton
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="text-center py-8 text-gray-500">
-                          Henüz kayıtlı rota yok
-                        </div>
-                      )}
+                      <div className="text-center py-8 text-gray-500">
+                        <Anchor className="w-8 h-8 mx-auto mb-3 text-gray-300" />
+                        <p className="font-medium">Anlık Hesaplama Modu</p>
+                        <p className="text-sm mt-1">
+                          Bu modda rotalar veritabanına kaydedilmez.
+                        </p>
+                        <p className="text-xs mt-2 text-gray-400">
+                          Tüm hesaplamalar anlık olarak yapılır ve sonuçlar sadece bu oturumda görüntülenir.
+                        </p>
+                      </div>
                     </div>
                   </TabsContent>
                 </Tabs>
