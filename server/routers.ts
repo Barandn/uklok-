@@ -240,6 +240,18 @@ export const appRouter = router({
         // Draft + güvenlik payı kadar minimum derinlik
         const minDepthMeters = Math.max(20, (digitalTwin.vessel.draft || 10) * 2);
 
+        // Mesafeye göre dinamik waypoint sayısı
+        // Kısa rotalar: 8, Orta: 12, Uzun: 16
+        const { calculateGreatCircleDistance } = await import("./vessel-performance");
+        const routeDistance = calculateGreatCircleDistance(
+          input.startLat, input.startLon,
+          input.endLat, input.endLon
+        );
+
+        // Her ~100nm için yaklaşık 2 waypoint (min 8, max 16)
+        const dynamicWaypoints = Math.min(16, Math.max(8, Math.round(routeDistance / 50)));
+        console.log(`[Genetic] Route distance: ${routeDistance.toFixed(0)}nm, using ${dynamicWaypoints} waypoints`);
+
         const result = await runGeneticOptimization({
           startLat: input.startLat,
           startLon: input.startLon,
@@ -251,7 +263,7 @@ export const appRouter = router({
           mutationRate: 0.2,
           crossoverRate: 0.8,
           eliteCount: 2,
-          numWaypoints: 6,
+          numWaypoints: dynamicWaypoints,
           weatherEnabled: input.weatherEnabled,
           avoidShallowWater: true,
           minDepth: minDepthMeters,
@@ -350,6 +362,14 @@ export const appRouter = router({
 
         const minDepthMeters = Math.max(20, (digitalTwin.vessel.draft || 10) * 2);
 
+        // Mesafeye göre dinamik waypoint sayısı
+        const { calculateGreatCircleDistance } = await import("./vessel-performance");
+        const routeDistance = calculateGreatCircleDistance(
+          input.startLat, input.startLon,
+          input.endLat, input.endLon
+        );
+        const dynamicWaypoints = Math.min(16, Math.max(8, Math.round(routeDistance / 50)));
+
         // Paralel olarak çalıştır
         const [simpleResult, geneticResult] = await Promise.all([
           createSimpleRoute(
@@ -370,7 +390,7 @@ export const appRouter = router({
             mutationRate: 0.2,
             crossoverRate: 0.8,
             eliteCount: 2,
-            numWaypoints: 6,
+            numWaypoints: dynamicWaypoints,
             weatherEnabled: false,
             avoidShallowWater: true,
             minDepth: minDepthMeters,
