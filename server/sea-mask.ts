@@ -156,7 +156,13 @@ function getNeighbors(point: GridPoint): GridPoint[] {
 }
 
 /**
+ * Maximum iterations for A* algorithm to prevent infinite loops
+ */
+const MAX_ASTAR_ITERATIONS = 50000;
+
+/**
  * Finds the shortest navigable path (A*) between two geographic coordinates.
+ * Uses optimized data structures and iteration limits to prevent hangs.
  */
 export function findOceanPath(startLat: number, startLon: number, endLat: number, endLon: number): PathResult {
   const startCell = findNearestSeaCell(startLat, startLon);
@@ -166,45 +172,70 @@ export function findOceanPath(startLat: number, startLon: number, endLat: number
     return { success: false, path: [], message: 'Başlangıç veya bitiş noktası için geçerli deniz hücresi bulunamadı' };
   }
 
+  // Use Set for O(1) lookup instead of Array.find() which is O(n)
   const openSet: GridPoint[] = [startCell];
+  const openSetKeys = new Set<string>([key(startCell)]);
+  const closedSet = new Set<string>();
   const cameFrom = new Map<string, GridPoint>();
   const gScore = new Map<string, number>();
   const fScore = new Map<string, number>();
 
   const startKey = key(startCell);
+  const endKey = key(endCell);
   gScore.set(startKey, 0);
   fScore.set(startKey, heuristic(startCell, endCell));
 
+  let iterations = 0;
+
   while (openSet.length > 0) {
+    // Prevent infinite loops with iteration limit
+    iterations++;
+    if (iterations > MAX_ASTAR_ITERATIONS) {
+      console.warn(`[A*] Iteration limit reached (${MAX_ASTAR_ITERATIONS}). Path may not be optimal.`);
+      return { success: false, path: [], message: `Rota hesaplama zaman aşımına uğradı (${iterations} iterasyon)` };
+    }
+
     openSet.sort((a, b) => (fScore.get(key(a)) ?? Infinity) - (fScore.get(key(b)) ?? Infinity));
     const current = openSet.shift()!;
     const currentKey = key(current);
+    openSetKeys.delete(currentKey);
+    closedSet.add(currentKey);
 
-    if (currentKey === key(endCell)) {
+    if (currentKey === endKey) {
       const gridPath = reconstructPath(current, cameFrom, startKey);
       const latLonPath: LatLon[] = gridPath.map(cellToLatLon);
       // use exact start/end coordinates for user clarity
       latLonPath[0] = { lat: startLat, lon: startLon };
       latLonPath[latLonPath.length - 1] = { lat: endLat, lon: endLon };
+      console.log(`[A*] Path found in ${iterations} iterations with ${latLonPath.length} waypoints`);
       return { success: true, path: latLonPath };
     }
 
     for (const neighbor of getNeighbors(current)) {
-      const tentativeG = (gScore.get(currentKey) ?? Infinity) + distanceBetween(current, neighbor);
       const neighborKey = key(neighbor);
+
+      // Skip if already processed
+      if (closedSet.has(neighborKey)) {
+        continue;
+      }
+
+      const tentativeG = (gScore.get(currentKey) ?? Infinity) + distanceBetween(current, neighbor);
 
       if (tentativeG < (gScore.get(neighborKey) ?? Infinity)) {
         cameFrom.set(neighborKey, current);
         gScore.set(neighborKey, tentativeG);
         fScore.set(neighborKey, tentativeG + heuristic(neighbor, endCell));
 
-        if (!openSet.find((p) => key(p) === neighborKey)) {
+        // O(1) check using Set instead of O(n) Array.find()
+        if (!openSetKeys.has(neighborKey)) {
           openSet.push(neighbor);
+          openSetKeys.add(neighborKey);
         }
       }
     }
   }
 
+  console.warn(`[A*] No path found after ${iterations} iterations`);
   return { success: false, path: [], message: 'Deniz maskesi üzerinde uygun rota bulunamadı' };
 }
 
