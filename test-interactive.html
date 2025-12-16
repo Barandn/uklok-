@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Green Shipping - API Test Console</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 10px; }
+        .subtitle { text-align: center; color: #4ade80; margin-bottom: 30px; }
+
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+
+        .card {
+            background: rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+        }
+        .card h2 { margin-top: 0; color: #60a5fa; font-size: 1.2em; }
+
+        .btn {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+            transition: transform 0.2s;
+        }
+        .btn:hover { transform: scale(1.05); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn.success { background: linear-gradient(135deg, #22c55e, #15803d); }
+        .btn.warning { background: linear-gradient(135deg, #f59e0b, #d97706); }
+
+        .result {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow: auto;
+            white-space: pre-wrap;
+        }
+        .result.success { border-left: 4px solid #22c55e; }
+        .result.error { border-left: 4px solid #ef4444; }
+
+        .input-group {
+            margin: 10px 0;
+        }
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #94a3b8;
+            font-size: 12px;
+        }
+        .input-group input, .input-group select {
+            width: 100%;
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #334155;
+            background: #1e293b;
+            color: white;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .stat {
+            background: rgba(59, 130, 246, 0.2);
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-value { font-size: 1.5em; font-weight: bold; color: #60a5fa; }
+        .stat-label { font-size: 11px; color: #94a3b8; }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #fff;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        .status-badge.online { background: #22c55e; }
+        .status-badge.offline { background: #ef4444; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚢 Green Shipping API Test Console</h1>
+        <p class="subtitle">Veritabanı Olmadan Anlık Hesaplama Modu</p>
+
+        <div class="grid">
+            <!-- Sol Panel -->
+            <div>
+                <!-- Status -->
+                <div class="card">
+                    <h2>📡 Sistem Durumu <span id="status-badge" class="status-badge offline">Kontrol ediliyor...</span></h2>
+                    <button class="btn" onclick="checkStatus()">Durumu Kontrol Et</button>
+                    <div id="status-result" class="result"></div>
+                </div>
+
+                <!-- Ports -->
+                <div class="card" style="margin-top: 20px;">
+                    <h2>🏭 Limanlar</h2>
+                    <button class="btn" onclick="testPorts()">Limanları Listele</button>
+                    <button class="btn" onclick="searchPorts()">Liman Ara</button>
+                    <div class="input-group">
+                        <label>Arama:</label>
+                        <input type="text" id="port-search" placeholder="istanbul, rotterdam..." value="istanbul">
+                    </div>
+                    <div id="ports-result" class="result"></div>
+                </div>
+
+                <!-- Vessels -->
+                <div class="card" style="margin-top: 20px;">
+                    <h2>🚢 Gemiler</h2>
+                    <button class="btn" onclick="testVessels()">Gemileri Listele</button>
+                    <div id="vessels-result" class="result"></div>
+                </div>
+            </div>
+
+            <!-- Sağ Panel -->
+            <div>
+                <!-- Optimization -->
+                <div class="card">
+                    <h2>🧬 Rota Optimizasyonu</h2>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <div class="input-group">
+                            <label>Başlangıç Enlem:</label>
+                            <input type="number" id="start-lat" value="41.0082" step="0.0001">
+                        </div>
+                        <div class="input-group">
+                            <label>Başlangıç Boylam:</label>
+                            <input type="number" id="start-lon" value="28.9784" step="0.0001">
+                        </div>
+                        <div class="input-group">
+                            <label>Varış Enlem:</label>
+                            <input type="number" id="end-lat" value="40.8518" step="0.0001">
+                        </div>
+                        <div class="input-group">
+                            <label>Varış Boylam:</label>
+                            <input type="number" id="end-lon" value="14.2681" step="0.0001">
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label>Hazır Rotalar:</label>
+                        <select id="preset-route" onchange="loadPreset()">
+                            <option value="">Manuel giriş</option>
+                            <option value="istanbul-naples" selected>İstanbul → Napoli</option>
+                            <option value="rotterdam-singapore">Rotterdam → Singapur</option>
+                            <option value="shanghai-losangeles">Şangay → Los Angeles</option>
+                            <option value="dubai-mumbai">Dubai → Mumbai</option>
+                        </select>
+                    </div>
+
+                    <div style="margin-top: 15px;">
+                        <button class="btn success" onclick="runSimple()">🌍 Great Circle</button>
+                        <button class="btn warning" onclick="runGenetic()">🧬 Genetik Algoritma</button>
+                        <button class="btn" onclick="runCompare()">📊 Karşılaştır</button>
+                    </div>
+
+                    <div id="optimization-stats" class="stats" style="display: none;">
+                        <div class="stat">
+                            <div class="stat-value" id="stat-distance">-</div>
+                            <div class="stat-label">Mesafe (nm)</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-fuel">-</div>
+                            <div class="stat-label">Yakıt (ton)</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-co2">-</div>
+                            <div class="stat-label">CO₂ (ton)</div>
+                        </div>
+                        <div class="stat">
+                            <div class="stat-value" id="stat-duration">-</div>
+                            <div class="stat-label">Süre (saat)</div>
+                        </div>
+                    </div>
+
+                    <div id="optimization-result" class="result"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const BASE_URL = 'http://localhost:3000/api/trpc';
+
+        const presets = {
+            'istanbul-naples': { startLat: 41.0082, startLon: 28.9784, endLat: 40.8518, endLon: 14.2681 },
+            'rotterdam-singapore': { startLat: 51.9225, startLon: 4.4792, endLat: 1.2897, endLon: 103.8501 },
+            'shanghai-losangeles': { startLat: 31.2304, startLon: 121.4737, endLat: 33.7405, endLon: -118.2538 },
+            'dubai-mumbai': { startLat: 25.2048, startLon: 55.2708, endLat: 18.9388, endLon: 72.8354 },
+        };
+
+        function loadPreset() {
+            const preset = document.getElementById('preset-route').value;
+            if (preset && presets[preset]) {
+                document.getElementById('start-lat').value = presets[preset].startLat;
+                document.getElementById('start-lon').value = presets[preset].startLon;
+                document.getElementById('end-lat').value = presets[preset].endLat;
+                document.getElementById('end-lon').value = presets[preset].endLon;
+            }
+        }
+
+        async function checkStatus() {
+            const badge = document.getElementById('status-badge');
+            const result = document.getElementById('status-result');
+
+            try {
+                const res = await fetch(`${BASE_URL}/ports.list?input={}`);
+                const data = await res.json();
+
+                if (data.result) {
+                    badge.className = 'status-badge online';
+                    badge.textContent = 'Online';
+                    result.className = 'result success';
+                    result.textContent = '✓ Server çalışıyor\n✓ API erişilebilir\n✓ ' + (data.result.data.json?.length || 0) + ' port yüklendi';
+                }
+            } catch (e) {
+                badge.className = 'status-badge offline';
+                badge.textContent = 'Offline';
+                result.className = 'result error';
+                result.textContent = '✗ Server erişilemiyor\n\nÇözüm: pnpm dev komutu çalıştırın';
+            }
+        }
+
+        async function testPorts() {
+            const result = document.getElementById('ports-result');
+            result.textContent = 'Yükleniyor...';
+
+            try {
+                const res = await fetch(`${BASE_URL}/ports.list?input={"limit":10}`);
+                const data = await res.json();
+
+                if (data.result) {
+                    const ports = data.result.data.json;
+                    result.className = 'result success';
+                    result.textContent = `✓ ${ports.length} liman bulundu:\n\n` +
+                        ports.map(p => `• ${p.name} (${p.country}) - ${p.code}`).join('\n');
+                }
+            } catch (e) {
+                result.className = 'result error';
+                result.textContent = 'Hata: ' + e.message;
+            }
+        }
+
+        async function searchPorts() {
+            const query = document.getElementById('port-search').value;
+            const result = document.getElementById('ports-result');
+            result.textContent = 'Aranıyor...';
+
+            try {
+                const res = await fetch(`${BASE_URL}/ports.search`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ json: { query, limit: 10 } })
+                });
+                const data = await res.json();
+
+                if (data.result) {
+                    const ports = data.result.data.json;
+                    result.className = 'result success';
+                    result.textContent = `✓ "${query}" için ${ports.length} sonuç:\n\n` +
+                        ports.map(p => `• ${p.name} (${p.country})\n  ${p.latitude.toFixed(4)}, ${p.longitude.toFixed(4)}`).join('\n\n');
+                }
+            } catch (e) {
+                result.className = 'result error';
+                result.textContent = 'Hata: ' + e.message;
+            }
+        }
+
+        async function testVessels() {
+            const result = document.getElementById('vessels-result');
+            result.textContent = 'Yükleniyor...';
+
+            try {
+                const res = await fetch(`${BASE_URL}/vessels.list`);
+                const data = await res.json();
+
+                if (data.result) {
+                    const vessels = data.result.data.json;
+                    result.className = 'result success';
+                    result.textContent = `✓ ${vessels.length} gemi bulundu:\n\n` +
+                        vessels.map(v => `🚢 ${v.name}\n   Tip: ${v.vesselType}\n   DWT: ${v.dwt} ton\n   Hız: ${v.serviceSpeed} knot\n   Yakıt: ${v.fuelType}`).join('\n\n');
+                }
+            } catch (e) {
+                result.className = 'result error';
+                result.textContent = 'Hata: ' + e.message;
+            }
+        }
+
+        function getRouteParams() {
+            return {
+                startLat: parseFloat(document.getElementById('start-lat').value),
+                startLon: parseFloat(document.getElementById('start-lon').value),
+                endLat: parseFloat(document.getElementById('end-lat').value),
+                endLon: parseFloat(document.getElementById('end-lon').value),
+            };
+        }
+
+        function showStats(data) {
+            document.getElementById('optimization-stats').style.display = 'grid';
+            document.getElementById('stat-distance').textContent = (data.totalDistance || 0).toFixed(1);
+            document.getElementById('stat-fuel').textContent = (data.totalFuel || 0).toFixed(2);
+            document.getElementById('stat-co2').textContent = (data.totalCO2 || 0).toFixed(2);
+            document.getElementById('stat-duration').textContent = (data.totalDuration || 0).toFixed(1);
+        }
+
+        async function runSimple() {
+            const result = document.getElementById('optimization-result');
+            result.textContent = 'Great Circle hesaplanıyor...';
+
+            try {
+                const params = getRouteParams();
+                const res = await fetch(`${BASE_URL}/optimization.runSimple`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ json: params })
+                });
+                const data = await res.json();
+
+                if (data.result?.data?.json) {
+                    const r = data.result.data.json;
+                    showStats(r);
+                    result.className = 'result success';
+                    result.textContent = `✓ Great Circle Rota Hesaplandı!\n\nAlgoritma: ${r.algorithm}\nWaypoint sayısı: ${r.path?.length || 0}\nHesaplama zamanı: ${r.calculatedAt}\n\nMesaj: ${r.message || 'Başarılı'}`;
+                }
+            } catch (e) {
+                result.className = 'result error';
+                result.textContent = 'Hata: ' + e.message;
+            }
+        }
+
+        async function runGenetic() {
+            const result = document.getElementById('optimization-result');
+            result.textContent = '🧬 Genetik algoritma çalışıyor... (Bu biraz zaman alabilir)';
+
+            try {
+                const params = { ...getRouteParams(), populationSize: 15, generations: 10, weatherEnabled: false };
+                const res = await fetch(`${BASE_URL}/optimization.runGenetic`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ json: params })
+                });
+                const data = await res.json();
+
+                if (data.result?.data?.json) {
+                    const r = data.result.data.json;
+                    showStats(r);
+                    result.className = 'result success';
+                    result.textContent = `✓ Genetik Algoritma Tamamlandı!\n\nAlgoritma: ${r.algorithm}\nWaypoint sayısı: ${r.path?.length || 0}\nHesaplama zamanı: ${r.calculatedAt}\n\nOptimizasyon başarılı!`;
+                }
+            } catch (e) {
+                result.className = 'result error';
+                result.textContent = 'Hata: ' + e.message;
+            }
+        }
+
+        async function runCompare() {
+            const result = document.getElementById('optimization-result');
+            result.textContent = '📊 Algoritmalar karşılaştırılıyor...';
+
+            try {
+                const params = getRouteParams();
+                const res = await fetch(`${BASE_URL}/optimization.compare`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ json: params })
+                });
+                const data = await res.json();
+
+                if (data.result?.data?.json) {
+                    const r = data.result.data.json;
+                    result.className = 'result success';
+                    result.textContent = `📊 KARŞILAŞTIRMA SONUÇLARI\n${'='.repeat(40)}\n\n` +
+                        `🌍 Great Circle:\n   Mesafe: ${r.greatCircle.totalDistance.toFixed(1)} nm\n   Yakıt: ${r.greatCircle.totalFuel.toFixed(2)} ton\n   CO₂: ${r.greatCircle.totalCO2.toFixed(2)} ton\n\n` +
+                        `🧬 Genetik:\n   Mesafe: ${r.genetic.totalDistance.toFixed(1)} nm\n   Yakıt: ${r.genetic.totalFuel.toFixed(2)} ton\n   CO₂: ${r.genetic.totalCO2.toFixed(2)} ton\n\n` +
+                        `${'='.repeat(40)}\n📈 FARK:\n   Yakıt tasarrufu: ${r.comparison.fuelSaving.toFixed(2)} ton\n   CO₂ tasarrufu: ${r.comparison.co2Saving.toFixed(2)} ton`;
+                }
+            } catch (e) {
+                result.className = 'result error';
+                result.textContent = 'Hata: ' + e.message;
+            }
+        }
+
+        // Sayfa yüklendiğinde
+        loadPreset();
+        checkStatus();
+    </script>
+</body>
+</html>
