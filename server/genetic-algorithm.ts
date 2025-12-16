@@ -110,17 +110,39 @@ function validateRoute(
 }
 
 /**
+ * Maximum total recursive calls allowed for findSeaValidPath
+ * Prevents exponential recursion from hanging the server
+ */
+let seaValidPathCallCount = 0;
+const MAX_SEA_VALID_PATH_CALLS = 100;
+
+/**
  * Find a valid intermediate waypoint between two points that crosses land
  * Uses recursive midpoint subdivision to find sea-valid path
  * Enhanced to handle complex Mediterranean routes (around Italy, Greece, etc.)
+ *
+ * OPTIMIZED: Reduced offsets and added call limit to prevent hangs
  */
 function findSeaValidPath(
   from: { lat: number; lon: number },
   to: { lat: number; lon: number },
   minDepth: number,
   checkShallowWater: boolean,
-  maxDepth: number = 4
+  maxDepth: number = 3,  // Reduced from 4 to limit recursion
+  isTopLevel: boolean = true
 ): Array<{ lat: number; lon: number }> {
+  // Reset call counter at top level
+  if (isTopLevel) {
+    seaValidPathCallCount = 0;
+  }
+
+  // Increment and check call limit
+  seaValidPathCallCount++;
+  if (seaValidPathCallCount > MAX_SEA_VALID_PATH_CALLS) {
+    console.warn(`[findSeaValidPath] Call limit reached (${MAX_SEA_VALID_PATH_CALLS}), returning midpoint`);
+    return [{ lat: (from.lat + to.lat) / 2, lon: (from.lon + to.lon) / 2 }];
+  }
+
   // If segment is already valid, return empty (no intermediate points needed)
   if (isSegmentValid(from, to, minDepth, checkShallowWater)) {
     return [];
@@ -139,9 +161,9 @@ function findSeaValidPath(
   const bearing = calculateBearing(from.lat, from.lon, to.lat, to.lon);
   const distance = calculateGreatCircleDistance(from.lat, from.lon, to.lat, to.lon);
 
-  // Try offsets at 90 degrees (perpendicular) to the route - larger offsets for complex routes
-  const offsets = [0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]; // Fraction of segment distance
-  const directions = [90, -90, 45, -45, 135, -135]; // Multiple directions
+  // OPTIMIZED: Reduced number of offsets to try (was 9x6=54, now 5x4=20)
+  const offsets = [0.1, 0.2, 0.3, 0.5, 0.7]; // Fraction of segment distance
+  const directions = [90, -90, 45, -45]; // Multiple directions
 
   for (const offset of offsets) {
     for (const dir of directions) {
@@ -161,16 +183,16 @@ function findSeaValidPath(
             return [candidate];
           }
 
-          // If only one direction is invalid, recursively fix it
-          if (toCandidate || fromCandidate) {
+          // If only one direction is invalid, recursively fix it (with call limit check)
+          if ((toCandidate || fromCandidate) && seaValidPathCallCount < MAX_SEA_VALID_PATH_CALLS) {
             const result: Array<{ lat: number; lon: number }> = [];
 
             if (!toCandidate) {
-              result.push(...findSeaValidPath(from, candidate, minDepth, checkShallowWater, maxDepth - 1));
+              result.push(...findSeaValidPath(from, candidate, minDepth, checkShallowWater, maxDepth - 1, false));
             }
             result.push(candidate);
             if (!fromCandidate) {
-              result.push(...findSeaValidPath(candidate, to, minDepth, checkShallowWater, maxDepth - 1));
+              result.push(...findSeaValidPath(candidate, to, minDepth, checkShallowWater, maxDepth - 1, false));
             }
 
             // Validate the entire result path
@@ -192,8 +214,8 @@ function findSeaValidPath(
     }
   }
 
-  // Try a grid search around the midpoint
-  const gridOffsets = [-3, -2, -1, 0, 1, 2, 3];
+  // OPTIMIZED: Reduced grid search (was 7x7=49, now 5x5=25)
+  const gridOffsets = [-2, -1, 0, 1, 2];
   const gridStep = 1.0; // degrees
 
   for (const latOffset of gridOffsets) {

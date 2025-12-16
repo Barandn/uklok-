@@ -253,14 +253,37 @@ export default function RouteOptimization() {
     onMutate: () => {
       setProgress(0);
       setProgressMessage("🧬 Populasyon oluşturuluyor...");
-      // Simüle edilmiş ilerleme
-      let currentGen = 0;
+      // More realistic progress simulation with multiple phases
+      let phase = 0;
+      const phases = [
+        { progress: 10, message: "🧬 Populasyon oluşturuluyor...", duration: 500 },
+        { progress: 20, message: "🗺️ Waypoint'ler hesaplanıyor...", duration: 800 },
+        { progress: 35, message: "🧬 Nesil 1-5 - Evrim başladı...", duration: 1000 },
+        { progress: 50, message: "🧬 Nesil 5-10 - Optimizasyon devam ediyor...", duration: 1200 },
+        { progress: 65, message: "🧬 Nesil 10-15 - En iyi rotalar seçiliyor...", duration: 1000 },
+        { progress: 75, message: "🔍 Rota doğrulaması yapılıyor...", duration: 1500 },
+        { progress: 85, message: "🌊 Deniz rotası kontrolü...", duration: 2000 },
+        { progress: 92, message: "⏳ Son düzeltmeler uygulanıyor...", duration: 3000 },
+      ];
+
+      const advancePhase = () => {
+        if (phase < phases.length) {
+          const currentPhase = phases[phase];
+          setProgress(currentPhase.progress);
+          setProgressMessage(currentPhase.message);
+          phase++;
+        }
+      };
+
+      advancePhase(); // Start first phase
+
       const interval = setInterval(() => {
-        currentGen += 5;
-        setProgress(Math.min((currentGen / 50) * 100, 90));
-        setProgressMessage(`🧬 Nesil ${currentGen}/50 - Evrim devam ediyor...`);
-        if (currentGen >= 50) clearInterval(interval);
-      }, 800);
+        advancePhase();
+        if (phase >= phases.length) {
+          clearInterval(interval);
+        }
+      }, 1500);
+
       return { interval };
     },
     onSuccess: (data, _vars, context: any) => {
@@ -279,7 +302,8 @@ export default function RouteOptimization() {
       if (context?.interval) clearInterval(context.interval);
       setProgress(0);
       setProgressMessage("");
-      toast.error(`Hata: ${error.message}`);
+      const errorMessage = error.message || "Bilinmeyen bir hata oluştu";
+      toast.error(`Rota oluşturulamadı: ${errorMessage}`);
     },
   });
 
