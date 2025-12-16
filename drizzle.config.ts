@@ -1,15 +1,12 @@
 import { defineConfig } from "drizzle-kit";
 
 const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  throw new Error("DATABASE_URL is required to run drizzle commands");
-}
 
+// Only define full config with credentials if DATABASE_URL is available
+// This allows schema-only operations (like generate) to work without a DB
 export default defineConfig({
   schema: "./drizzle/schema.ts",
   out: "./drizzle",
   dialect: "mysql",
-  dbCredentials: {
-    url: connectionString,
-  },
+  ...(connectionString ? { dbCredentials: { url: connectionString } } : {}),
 });

@@ -270,7 +270,7 @@ class SDKServer {
     const signedInAt = new Date();
     let user = await db.getUserByOpenId(sessionUserId);
 
-    // If user not in DB, sync from OAuth server automatically
+    // If user not in DB, try to sync from OAuth server or create from session
     if (!user) {
       try {
         const userInfo = await this.getUserInfoWithJwt(sessionCookie ?? "");
@@ -283,15 +283,38 @@ class SDKServer {
         });
         user = await db.getUserByOpenId(userInfo.openId);
       } catch (error) {
-        console.error("[Auth] Failed to sync user from OAuth:", error);
-        throw ForbiddenError("Failed to sync user info");
+        console.warn("[Auth] Failed to sync user from OAuth, using session data:", error);
+        // Fallback: create user object from session data (stateless mode)
+        user = {
+          id: 0,
+          openId: session.openId,
+          name: session.name || null,
+          email: null,
+          loginMethod: null,
+          role: "user",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          lastSignedIn: signedInAt,
+        };
       }
     }
 
+    // If still no user (shouldn't happen), create from session
     if (!user) {
-      throw ForbiddenError("User not found");
+      user = {
+        id: 0,
+        openId: session.openId,
+        name: session.name || null,
+        email: null,
+        loginMethod: null,
+        role: "user",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastSignedIn: signedInAt,
+      };
     }
 
+    // Try to update last signed in (will silently fail without DB)
     await db.upsertUser({
       openId: user.openId,
       lastSignedIn: signedInAt,
