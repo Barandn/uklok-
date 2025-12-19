@@ -6,8 +6,7 @@
 
 import { DigitalTwin, calculateGreatCircleDistance, calculateBearing, calculateDestinationPoint } from "./vessel-performance";
 import { WeatherData, fetchCombinedWeather, checkDepth } from "./weather";
-import { isPointOnLand, routeCrossesLand } from './coastline';
-import { isPointInSea, segmentCrossesLand as seaMaskSegmentCrossesLand, validateSeaRoute, findOceanPath } from './sea-mask';
+import { isPointInSea, segmentCrossesLand, validateSeaRoute, findOceanPath } from './sea-mask';
 
 /**
  * Maximum attempts for resampling waypoints when validation fails
@@ -20,23 +19,16 @@ const MAX_RESAMPLE_ATTEMPTS = 30;
 const SEGMENT_SAMPLE_POINTS = 15;
 
 /**
- * Check if a point is definitely in sea (both coastline and sea-mask agree)
- * Uses DUAL validation for maximum safety
+ * Check if a point is definitely in sea using the high-resolution ocean mask
+ * The ocean mask is generated from Natural Earth land polygons with 0.25 degree resolution
  */
 function isDefinitelyInSea(lat: number, lon: number): boolean {
-  // Method 1: Sea mask grid check (reliable for open water)
-  const inSeaMask = isPointInSea(lat, lon);
-
-  // Method 2: Coastline proximity check (reliable for coastal areas)
-  const nearCoast = isPointOnLand(lat, lon, 0.05); // 5km buffer
-
-  // Point must be in sea mask AND not too close to coastline
-  return inSeaMask && !nearCoast;
+  return isPointInSea(lat, lon);
 }
 
 /**
  * Check if a segment between two points is valid (no land crossing, adequate depth)
- * Uses DUAL validation - both coastline intersection AND sea-mask grid
+ * Uses high-resolution sea-mask with distance-adaptive sampling
  * @param from Start point
  * @param to End point
  * @param minDepth Minimum required depth (ship's draft)
@@ -49,18 +41,13 @@ function isSegmentValid(
   minDepth: number,
   checkShallowWater: boolean
 ): boolean {
-  // Check 1: Coastline intersection (detects crossing shoreline)
-  if (routeCrossesLand(from.lat, from.lon, to.lat, to.lon, SEGMENT_SAMPLE_POINTS)) {
-    return false;
-  }
-
-  // Check 2: Sea mask validation (detects land interior points)
-  if (seaMaskSegmentCrossesLand(from.lat, from.lon, to.lat, to.lon, SEGMENT_SAMPLE_POINTS)) {
-    return false;
-  }
-
-  // Check 3: Endpoint validation
+  // Check 1: Endpoint validation
   if (!isDefinitelyInSea(from.lat, from.lon) || !isDefinitelyInSea(to.lat, to.lon)) {
+    return false;
+  }
+
+  // Check 2: Sea mask validation with distance-adaptive sampling
+  if (segmentCrossesLand(from.lat, from.lon, to.lat, to.lon)) {
     return false;
   }
 
@@ -172,7 +159,7 @@ function findSeaValidPath(
       const candidate = calculateDestinationPoint(midLat, midLon, offsetDistance, offsetBearing);
 
       // Check if candidate point is in valid water
-      if (!isPointOnLand(candidate.lat, candidate.lon, 0.02)) {
+      if (isPointInSea(candidate.lat, candidate.lon)) {
         const depth = checkDepth(candidate.lat, candidate.lon);
         if (depth > 0 && (!checkShallowWater || depth >= minDepth)) {
           // Check if segments to/from candidate are valid
@@ -227,7 +214,7 @@ function findSeaValidPath(
         lon: midLon + lonOffset * gridStep
       };
 
-      if (!isPointOnLand(candidate.lat, candidate.lon, 0.02)) {
+      if (isPointInSea(candidate.lat, candidate.lon)) {
         const depth = checkDepth(candidate.lat, candidate.lon);
         if (depth > 0 && (!checkShallowWater || depth >= minDepth)) {
           const toCandidate = isSegmentValid(from, candidate, minDepth, checkShallowWater);
@@ -624,7 +611,7 @@ function generateRandomWaypoints(
       }
 
       // Check 2: Coastline proximity (avoid coastal areas)
-      if (isPointOnLand(candidate.lat, candidate.lon, 0.05)) {
+      if (!isPointInSea(candidate.lat, candidate.lon)) {
         attempts++;
         continue;
       }
@@ -668,7 +655,7 @@ function generateRandomWaypoints(
       const safePoint = calculateDestinationPoint(startLat, startLon, baseDistance, bearing);
 
       // Check if this safe point is valid
-      if (!isPointOnLand(safePoint.lat, safePoint.lon, 0.02)) {
+      if (isPointInSea(safePoint.lat, safePoint.lon)) {
         const safeDepth = checkDepth(safePoint.lat, safePoint.lon);
         if (safeDepth > 0 && (!avoidShallowWater || safeDepth >= minDepth)) {
           point = safePoint;
@@ -752,7 +739,7 @@ async function evaluateChromosome(
     const distance = calculateGreatCircleDistance(from.lat, from.lon, to.lat, to.lon);
 
     // CRITICAL: Check if segment crosses land
-    if (routeCrossesLand(from.lat, from.lon, to.lat, to.lon, SEGMENT_SAMPLE_POINTS)) {
+    if (segmentCrossesLand(from.lat, from.lon, to.lat, to.lon)) {
       // Apply severe penalty for land crossing
       landCrossingPenalty += 1000;
     }
@@ -863,7 +850,7 @@ function crossover(
 
     // Check segments around crossover point (most likely to be invalid)
     for (let i = Math.max(0, crossoverPoint - 1); i < Math.min(allPoints.length - 1, crossoverPoint + 2); i++) {
-      if (routeCrossesLand(allPoints[i].lat, allPoints[i].lon, allPoints[i + 1].lat, allPoints[i + 1].lon, 10)) {
+      if (segmentCrossesLand(allPoints[i].lat, allPoints[i].lon, allPoints[i + 1].lat, allPoints[i + 1].lon)) {
         valid = false;
         break;
       }
@@ -929,7 +916,7 @@ function mutate(
     const candidate = calculateDestinationPoint(startLat, startLon, randomDistance, randomBearing);
 
     // Kara kontrolü
-    if (isPointOnLand(candidate.lat, candidate.lon, 0.03)) {
+    if (!isPointInSea(candidate.lat, candidate.lon)) {
       attempts++;
       continue;
     }
