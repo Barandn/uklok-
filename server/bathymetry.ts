@@ -31,6 +31,37 @@ const CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 const API_TIMEOUT = 8000; // 8 seconds
 
 /**
+ * Rate limiting: max concurrent requests to NOAA API
+ * Prevents overwhelming the external server
+ */
+const MAX_CONCURRENT_REQUESTS = 3;
+let activeRequests = 0;
+const requestQueue: Array<() => void> = [];
+
+/**
+ * Simple semaphore for rate limiting
+ */
+async function acquireSlot(): Promise<void> {
+  if (activeRequests < MAX_CONCURRENT_REQUESTS) {
+    activeRequests++;
+    return;
+  }
+
+  return new Promise((resolve) => {
+    requestQueue.push(() => {
+      activeRequests++;
+      resolve();
+    });
+  });
+}
+
+function releaseSlot(): void {
+  activeRequests--;
+  const next = requestQueue.shift();
+  if (next) next();
+}
+
+/**
  * Statistics for monitoring
  */
 let stats = {
@@ -100,6 +131,7 @@ function getDepthFallback(lat: number, lon: number): number {
  * Query real depth from NOAA ERDDAP API
  * Returns depth in meters (positive value)
  * Uses aggressive caching to minimize API calls
+ * Includes rate limiting to prevent overwhelming external servers
  */
 export async function getRealDepth(lat: number, lon: number): Promise<number> {
   const cacheKey = getCacheKey(lat, lon);
@@ -113,6 +145,9 @@ export async function getRealDepth(lat: number, lon: number): Promise<number> {
 
   stats.cacheMisses++;
 
+  // Rate limiting - wait for available slot
+  await acquireSlot();
+
   try {
     // Query ERDDAP API
     // Format: /griddap/dataset.json?variable[(lat)][(lon)]
@@ -123,8 +158,22 @@ export async function getRealDepth(lat: number, lon: number): Promise<number> {
       timeout: API_TIMEOUT,
       headers: {
         'User-Agent': 'UklokGreenShipping/1.0',
-      }
+        'Accept': 'application/json',
+      },
+      // Validate response is JSON, not HTML
+      validateStatus: (status) => status >= 200 && status < 300,
     });
+
+    // Check if response is actually JSON (not HTML error page)
+    const contentType = response.headers['content-type'] || '';
+    if (contentType.includes('text/html')) {
+      throw new Error('ERDDAP returned HTML instead of JSON (likely rate limited or maintenance)');
+    }
+
+    // Additional check: ensure data structure is valid
+    if (typeof response.data !== 'object' || response.data === null) {
+      throw new Error('Invalid response format from ERDDAP');
+    }
 
     // Parse response
     // Response format: { table: { rows: [[lat, lon, elevation]] } }
@@ -144,16 +193,24 @@ export async function getRealDepth(lat: number, lon: number): Promise<number> {
     return depth;
   } catch (error) {
     stats.apiErrors++;
-    console.warn(`[Bathymetry] ERDDAP API failed for (${lat}, ${lon}):`, error instanceof Error ? error.message : error);
+    // Only log first few errors to avoid spam
+    if (stats.apiErrors <= 5) {
+      console.warn(`[Bathymetry] ERDDAP API failed for (${lat.toFixed(2)}, ${lon.toFixed(2)}):`, error instanceof Error ? error.message : 'Unknown error');
+    } else if (stats.apiErrors === 6) {
+      console.warn('[Bathymetry] Suppressing further API error logs...');
+    }
 
     // Fallback to estimation
     stats.fallbacks++;
     const fallbackDepth = getDepthFallback(lat, lon);
 
-    // Cache fallback too (shorter TTL)
+    // Cache fallback too
     depthCache.set(cacheKey, { depth: fallbackDepth, timestamp: Date.now() });
 
     return fallbackDepth;
+  } finally {
+    // Always release the slot
+    releaseSlot();
   }
 }
 
@@ -212,18 +269,21 @@ export async function getBatchDepths(
  * Pre-fetch depth data for a route bounding box
  * Queries a grid of points within the route bounds
  * Call this before running genetic algorithm for better performance
+ *
+ * NOTE: If NOAA API is unavailable, this will gracefully use fallback estimation
+ * without blocking route calculation
  */
 export async function prefetchRouteDepths(
   startLat: number,
   startLon: number,
   endLat: number,
   endLon: number,
-  gridResolution: number = 0.25 // degrees (~27km)
+  gridResolution: number = 0.5 // Increased to reduce API calls (was 0.25)
 ): Promise<void> {
-  const minLat = Math.min(startLat, endLat) - 1; // Add 1 degree buffer
-  const maxLat = Math.max(startLat, endLat) + 1;
-  const minLon = Math.min(startLon, endLon) - 1;
-  const maxLon = Math.max(startLon, endLon) + 1;
+  const minLat = Math.min(startLat, endLat) - 0.5; // Reduced buffer
+  const maxLat = Math.max(startLat, endLat) + 0.5;
+  const minLon = Math.min(startLon, endLon) - 0.5;
+  const maxLon = Math.max(startLon, endLon) + 0.5;
 
   const coordinates: Array<{ lat: number; lon: number }> = [];
 
@@ -234,13 +294,33 @@ export async function prefetchRouteDepths(
     }
   }
 
-  console.log(`[Bathymetry] Pre-fetching ${coordinates.length} grid points for route...`);
+  // Limit total points to prevent excessive API calls
+  const maxPoints = 50;
+  const limitedCoords = coordinates.length > maxPoints
+    ? coordinates.slice(0, maxPoints)
+    : coordinates;
+
+  console.log(`[Bathymetry] Pre-fetching ${limitedCoords.length} grid points for route...`);
 
   const startTime = Date.now();
-  await getBatchDepths(coordinates);
-  const duration = Date.now() - startTime;
 
-  console.log(`[Bathymetry] Pre-fetch completed in ${duration}ms`);
+  try {
+    // Set a timeout for the entire prefetch operation
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      setTimeout(() => reject(new Error('Prefetch timeout')), 15000);
+    });
+
+    await Promise.race([
+      getBatchDepths(limitedCoords),
+      timeoutPromise
+    ]);
+
+    const duration = Date.now() - startTime;
+    console.log(`[Bathymetry] Pre-fetch completed in ${duration}ms (${stats.cacheHits} cache hits, ${stats.fallbacks} fallbacks)`);
+  } catch (error) {
+    console.warn(`[Bathymetry] Pre-fetch failed or timed out, using fallback estimation:`, error instanceof Error ? error.message : 'Unknown error');
+    // Don't throw - route calculation will use fallback depths
+  }
 }
 
 /**
