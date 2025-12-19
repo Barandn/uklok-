@@ -1,17 +1,87 @@
 /**
  * Real Bathymetry Data Integration
- * Uses NOAA ERDDAP ETOPO 2022 for accurate depth information
- * Integrates with genetic algorithm and vessel draft validation
+ * Uses local pre-downloaded ETOPO data for fast, reliable depth queries
+ * Falls back to NOAA ERDDAP API only if local data is unavailable
  */
 
 import axios from "axios";
+import * as fs from "fs";
+import * as path from "path";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
 import { distanceToCoastlineKm, isPointOnLand as isCoastlinePointOnLand } from "./coastline";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 /**
- * NOAA ERDDAP ETOPO 2022 endpoint
+ * NOAA ERDDAP ETOPO 2022 endpoint (fallback only)
  * 15 arc-second resolution (~450m accuracy)
  */
 const ERDDAP_BASE = "https://oceanwatch.pifsc.noaa.gov/erddap/griddap/ETOPO_2022_v1_15s";
+
+/**
+ * Local bathymetry data structure
+ */
+interface LocalBathymetryData {
+  originLat: number;
+  originLon: number;
+  resolution: number;
+  width: number;
+  height: number;
+  depths: number[][];
+}
+
+/**
+ * Cached local bathymetry data
+ */
+let localBathymetry: LocalBathymetryData | null = null;
+let localDataAvailable = false;
+
+/**
+ * Load local bathymetry data if available
+ */
+function loadLocalBathymetry(): LocalBathymetryData | null {
+  if (localBathymetry !== null) return localBathymetry;
+
+  const localPath = path.join(__dirname, 'data', 'bathymetry-local.json');
+
+  try {
+    if (fs.existsSync(localPath)) {
+      console.log('[Bathymetry] Loading local bathymetry data...');
+      const raw = fs.readFileSync(localPath, 'utf-8');
+      localBathymetry = JSON.parse(raw);
+      localDataAvailable = true;
+      console.log(`[Bathymetry] Loaded local data: ${localBathymetry!.width}x${localBathymetry!.height} grid, ${localBathymetry!.resolution}° resolution`);
+      return localBathymetry;
+    }
+  } catch (error) {
+    console.warn('[Bathymetry] Failed to load local data:', error);
+  }
+
+  console.log('[Bathymetry] Local data not available, will use API fallback');
+  return null;
+}
+
+/**
+ * Get depth from local data
+ * Returns null if point is outside local data bounds
+ */
+function getLocalDepth(lat: number, lon: number): number | null {
+  const data = loadLocalBathymetry();
+  if (!data) return null;
+
+  // Calculate grid position
+  const row = Math.floor((data.originLat - lat) / data.resolution);
+  const col = Math.floor((lon - data.originLon) / data.resolution);
+
+  // Check bounds
+  if (row < 0 || row >= data.height || col < 0 || col >= data.width) {
+    return null; // Outside local data bounds
+  }
+
+  return data.depths[row]?.[col] ?? null;
+}
 
 /**
  * In-memory cache for depth queries
@@ -128,24 +198,39 @@ function getDepthFallback(lat: number, lon: number): number {
 }
 
 /**
- * Query real depth from NOAA ERDDAP API
+ * Query real depth - uses local data first, then API fallback
  * Returns depth in meters (positive value)
- * Uses aggressive caching to minimize API calls
- * Includes rate limiting to prevent overwhelming external servers
+ * Priority: 1) Memory cache, 2) Local file, 3) NOAA API, 4) Fallback estimation
  */
 export async function getRealDepth(lat: number, lon: number): Promise<number> {
   const cacheKey = getCacheKey(lat, lon);
   const cached = depthCache.get(cacheKey);
 
-  // Check cache
+  // Check memory cache first
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     stats.cacheHits++;
     return cached.depth;
   }
 
+  // Try local data (fast, no network)
+  const localDepth = getLocalDepth(lat, lon);
+  if (localDepth !== null) {
+    stats.cacheHits++;
+    depthCache.set(cacheKey, { depth: localDepth, timestamp: Date.now() });
+    return localDepth;
+  }
+
   stats.cacheMisses++;
 
-  // Rate limiting - wait for available slot
+  // If local data is available but point is outside bounds, use fallback directly
+  // (Don't call API for points outside common shipping routes)
+  if (localDataAvailable) {
+    const fallbackDepth = getDepthFallback(lat, lon);
+    depthCache.set(cacheKey, { depth: fallbackDepth, timestamp: Date.now() });
+    return fallbackDepth;
+  }
+
+  // Rate limiting - wait for available slot (API fallback only)
   await acquireSlot();
 
   try {
