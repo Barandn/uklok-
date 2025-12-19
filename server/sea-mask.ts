@@ -157,8 +157,9 @@ function getNeighbors(point: GridPoint): GridPoint[] {
 
 /**
  * Maximum iterations for A* algorithm to prevent infinite loops
+ * Increased to handle global routes (e.g., Singapore to Rotterdam)
  */
-const MAX_ASTAR_ITERATIONS = 50000;
+const MAX_ASTAR_ITERATIONS = 200000;
 
 /**
  * Finds the shortest navigable path (A*) between two geographic coordinates.
@@ -264,21 +265,29 @@ export function isPointInSea(lat: number, lon: number): boolean {
 
 /**
  * Check if a line segment crosses land
- * Samples points along the segment and checks each one
- * @param samples Number of points to check (default 20)
+ * Samples points along the segment based on distance
+ * More samples for longer segments to ensure accuracy
  * @returns true if segment crosses land
  */
 export function segmentCrossesLand(
   lat1: number,
   lon1: number,
   lat2: number,
-  lon2: number,
-  samples: number = 20
+  lon2: number
 ): boolean {
   // Check endpoints first
   if (!isPointInSea(lat1, lon1) || !isPointInSea(lat2, lon2)) {
     return true;
   }
+
+  // Calculate distance to determine number of samples
+  const distance = calculateGreatCircleDistance(lat1, lon1, lat2, lon2);
+  const mask = loadSeaMask();
+
+  // Sample every ~10-20km (based on resolution) to ensure we don't miss any land
+  // With 0.25 degree resolution (~28km), we want to sample at least every 10km
+  const sampleDistance = mask.resolution * 111 * 0.4; // ~40% of cell size in km
+  const samples = Math.max(10, Math.ceil(distance / sampleDistance));
 
   // Sample points along the segment
   for (let i = 1; i < samples; i++) {
@@ -311,11 +320,11 @@ export function validateSeaRoute(
     }
   }
 
-  // Check all segments
+  // Check all segments with distance-adaptive sampling
   for (let i = 0; i < waypoints.length - 1; i++) {
     const from = waypoints[i];
     const to = waypoints[i + 1];
-    if (segmentCrossesLand(from.lat, from.lon, to.lat, to.lon, 25)) {
+    if (segmentCrossesLand(from.lat, from.lon, to.lat, to.lon)) {
       landSegments.push(i);
     }
   }

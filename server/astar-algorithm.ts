@@ -6,7 +6,7 @@
 
 import { DigitalTwin, calculateGreatCircleDistance, calculateDestinationPoint, calculateBearing } from "./vessel-performance";
 import { WeatherData, fetchCombinedWeather, checkDepth } from "./weather";
-import { isPointOnLand, routeCrossesLand } from './coastline';
+import { isPointInSea, segmentCrossesLand } from './sea-mask';
 
 /**
  * Grid node - A* için düğüm yapısı
@@ -199,9 +199,14 @@ async function generateNeighbors(
       bearing
     );
     
-    // Kara kontrolü - gerçek coastline verisi kullan (küçük buffer)
-    if (isPointOnLand(destination.lat, destination.lon, 0.01)) {
+    // Kara kontrolü - sea-mask modülü kullan (yüksek çözünürlüklü)
+    if (!isPointInSea(destination.lat, destination.lon)) {
       continue; // Kara üzerinden geçemez
+    }
+
+    // Segment kara kontrolü - mevcut noktadan yeni noktaya giden hat karadan geçiyor mu?
+    if (segmentCrossesLand(current.lat, current.lon, destination.lat, destination.lon)) {
+      continue; // Bu segment karadan geçiyor
     }
     
     // Sığ su kontrolü (backup)
