@@ -42,12 +42,45 @@ let cachedMask: SeaMask | null = null;
 function loadSeaMask(): SeaMask {
   if (cachedMask) return cachedMask;
 
-  const maskPath = path.join(__dirname, 'data', 'ocean-mask.json');
-  const raw = fs.readFileSync(maskPath, 'utf-8');
-  const parsed: SeaMask = JSON.parse(raw);
+  // Try high-resolution mask first (0.25° resolution, ~28km cells)
+  // Falls back to standard mask if high-res not available
+  const highResPath = path.join(__dirname, 'data', 'ocean-mask-highres.json');
+  const standardPath = path.join(__dirname, 'data', 'ocean-mask.json');
 
-  cachedMask = parsed;
-  return parsed;
+  let maskPath = standardPath;
+
+  try {
+    if (fs.existsSync(highResPath)) {
+      maskPath = highResPath;
+      console.log('[SeaMask] Using high-resolution ocean mask (0.25° resolution)');
+    } else {
+      console.log('[SeaMask] High-res mask not found, using standard resolution');
+    }
+  } catch (e) {
+    console.warn('[SeaMask] Error checking for high-res mask:', e);
+  }
+
+  try {
+    const raw = fs.readFileSync(maskPath, 'utf-8');
+    const parsed: SeaMask = JSON.parse(raw);
+    cachedMask = parsed;
+    console.log(`[SeaMask] Loaded mask: ${parsed.width}x${parsed.height} cells, resolution: ${parsed.resolution}°`);
+    return parsed;
+  } catch (error) {
+    console.error('[SeaMask] Failed to load ocean mask:', error);
+    // Return a safe default mask that marks everything as water
+    // This prevents crashes but routing will need to rely on other checks
+    const defaultMask: SeaMask = {
+      originLat: 90,
+      originLon: -180,
+      resolution: 1,
+      width: 360,
+      height: 180,
+      mask: Array(180).fill(null).map(() => Array(360).fill(0)) // All water
+    };
+    cachedMask = defaultMask;
+    return defaultMask;
+  }
 }
 
 function normalizeLongitude(lon: number): number {

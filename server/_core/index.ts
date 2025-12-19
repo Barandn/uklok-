@@ -1,5 +1,5 @@
 import "dotenv/config";
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
@@ -7,6 +7,33 @@ import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+
+/**
+ * API Error Handler Middleware
+ * Ensures API routes always return JSON, never HTML
+ * This prevents "Unexpected token '<'" errors on the client
+ */
+function apiErrorHandler(err: Error, req: Request, res: Response, next: NextFunction) {
+  // Only handle errors for API routes
+  if (!req.originalUrl.startsWith('/api')) {
+    return next(err);
+  }
+
+  console.error('[API Error]', {
+    url: req.originalUrl,
+    method: req.method,
+    error: err.message,
+    stack: err.stack
+  });
+
+  // Always return JSON for API errors
+  res.status(500).json({
+    error: {
+      message: err.message || 'Internal server error',
+      code: 'INTERNAL_SERVER_ERROR'
+    }
+  });
+}
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -35,12 +62,19 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
-  // tRPC API
+  // tRPC API with error handling
   app.use(
     "/api/trpc",
     createExpressMiddleware({
       router: appRouter,
       createContext,
+      onError: ({ path, error }) => {
+        console.error(`[tRPC Error] ${path}:`, {
+          code: error.code,
+          message: error.message,
+          cause: error.cause
+        });
+      }
     })
   );
   // development mode uses Vite, production mode uses static files
@@ -49,6 +83,10 @@ async function startServer() {
   } else {
     serveStatic(app);
   }
+
+  // API error handler - ensures API routes always return JSON
+  // Must come after all routes but before the server starts
+  app.use(apiErrorHandler);
 
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);
