@@ -417,83 +417,54 @@ export async function runGeneticOptimization(params: GeneticParams): Promise<Gen
     console.log(`[GeneticAlgorithm] Final route has land crossing issues.`);
     console.log(`  - Coastline validation: ${validation.invalidSegments.length} invalid segments`);
     console.log(`  - Sea-mask validation: ${seaMaskValidation.landPoints.length} land points, ${seaMaskValidation.landSegments.length} land segments`);
-    console.log(`[GeneticAlgorithm] Attempting to fix with intermediate waypoints...`);
 
-    // Fix invalid segments by inserting sea-valid intermediate waypoints
-    const fixedPath: Array<{ lat: number; lon: number }> = [finalPath[0]];
+    // ALWAYS use A* for land crossing issues - it's reliable and handles peninsulas correctly
+    console.log(`[GeneticAlgorithm] Using A* ocean path for guaranteed sea-only route...`);
+    const astarResult = findOceanPath(startLat, startLon, endLat, endLon);
 
-    for (let i = 0; i < finalPath.length - 1; i++) {
-      const from = finalPath[i];
-      const to = finalPath[i + 1];
+    if (astarResult.success && astarResult.path.length > 0) {
+      console.log(`[GeneticAlgorithm] A* successful: ${astarResult.path.length} waypoints`);
+      finalPath = astarResult.path;
 
-      const segmentInvalid = validation.invalidSegments.includes(i) ||
-                             seaMaskValidation.landSegments.includes(i);
-
-      if (segmentInvalid) {
-        // This segment crosses land - find alternative path
-        const intermediatePts = findSeaValidPath(from, to, minDepth, avoidShallowWater);
-        fixedPath.push(...intermediatePts);
+      // Recalculate metrics for A* path
+      let totalDistance = 0;
+      for (let i = 0; i < finalPath.length - 1; i++) {
+        totalDistance += calculateGreatCircleDistance(
+          finalPath[i].lat, finalPath[i].lon,
+          finalPath[i + 1].lat, finalPath[i + 1].lon
+        );
       }
 
-      fixedPath.push(to);
-    }
+      const avgSpeed = vessel.vessel.serviceSpeed;
+      const totalDuration = totalDistance / avgSpeed;
+      const fuelRate = vessel.vessel.fuelConsumptionRate / 24;
+      const totalFuel = totalDuration * fuelRate;
+      const totalCO2 = totalFuel * 3.114;
 
-    finalPath = fixedPath;
-
-    // Re-validate the fixed path with both methods
-    const revalidation = validateRoute(finalPath, minDepth, avoidShallowWater);
-    const reSeaMaskValidation = validateSeaRoute(finalPath);
-
-    if (!revalidation.valid || !reSeaMaskValidation.valid) {
-      console.warn(`[GeneticAlgorithm] Could not fix GA route. Using A* ocean path as fallback.`);
-
-      // FALLBACK: Use A* algorithm on sea-mask grid
-      const astarResult = findOceanPath(startLat, startLon, endLat, endLon);
-
-      if (astarResult.success && astarResult.path.length > 0) {
-        console.log(`[GeneticAlgorithm] A* fallback successful: ${astarResult.path.length} waypoints`);
-        finalPath = astarResult.path;
-
-        // Recalculate metrics for A* path
-        let totalDistance = 0;
-        for (let i = 0; i < finalPath.length - 1; i++) {
-          totalDistance += calculateGreatCircleDistance(
-            finalPath[i].lat, finalPath[i].lon,
-            finalPath[i + 1].lat, finalPath[i + 1].lon
-          );
-        }
-
-        const avgSpeed = vessel.vessel.serviceSpeed;
-        const totalDuration = totalDistance / avgSpeed;
-        const fuelRate = vessel.vessel.fuelConsumptionRate / 24;
-        const totalFuel = totalDuration * fuelRate;
-        const totalCO2 = totalFuel * 3.114;
-
-        return {
-          success: true,
-          path: finalPath,
-          totalDistance,
-          totalFuel,
-          totalCO2,
-          totalDuration,
-          generations,
-          bestFitness: 0, // A* doesn't have fitness
-          message: 'A* fallback used - guaranteed sea-only route',
-        };
-      } else {
-        console.error(`[GeneticAlgorithm] A* fallback also failed!`);
-        return {
-          success: false,
-          path: [],
-          totalDistance: 0,
-          totalFuel: 0,
-          totalCO2: 0,
-          totalDuration: 0,
-          generations,
-          bestFitness: 0,
-          message: 'Could not find valid sea-only route',
-        };
-      }
+      return {
+        success: true,
+        path: finalPath,
+        totalDistance,
+        totalFuel,
+        totalCO2,
+        totalDuration,
+        generations,
+        bestFitness: finalBest.fitness,
+        message: 'A* used for sea-only route (genetic had land crossing)',
+      };
+    } else {
+      console.error(`[GeneticAlgorithm] A* also failed!`);
+      return {
+        success: false,
+        path: [],
+        totalDistance: 0,
+        totalFuel: 0,
+        totalCO2: 0,
+        totalDuration: 0,
+        generations,
+        bestFitness: 0,
+        message: 'Could not find valid sea-only route',
+      };
     }
   }
 
