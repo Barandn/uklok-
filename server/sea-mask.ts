@@ -1,7 +1,7 @@
 /**
  * Sea/Ocean mask helper
  * Loads a coarse binary raster and exposes helpers to route over navigable water cells.
- * Enhanced with 50m land polygon checks for accurate narrow passage detection.
+ * Enhanced with high-resolution pre-computed land grid for O(1) lookups.
  */
 
 import * as fs from 'fs';
@@ -10,6 +10,10 @@ import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { calculateGreatCircleDistance } from './vessel-performance';
 import { isPointInsideLand, routeCrossesLand as coastlineCrossesLand } from './coastline';
+import { isLandFast, segmentCrossesLandFast, initializeLandGrid } from './land-grid';
+
+// Initialize land grid at module load (runs in background)
+initializeLandGrid();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -122,10 +126,10 @@ function isSeaCell(point: GridPoint): boolean {
 function findNearestSeaCell(lat: number, lon: number, maxRadius = 3): GridPoint | null {
   const startCell = latLonToCell(lat, lon);
 
-  // Check if starting cell is valid sea (both ocean mask and land polygon)
+  // Check if starting cell is valid sea using fast grid
   if (startCell && isSeaCell(startCell)) {
     const cellCenter = cellToLatLon(startCell);
-    if (!isPointInsideLand(cellCenter.lat, cellCenter.lon)) {
+    if (!isLandFast(cellCenter.lat, cellCenter.lon)) {
       return startCell;
     }
   }
@@ -150,9 +154,9 @@ function findNearestSeaCell(lat: number, lon: number, maxRadius = 3): GridPoint 
 
         const candidate: GridPoint = { row: candidateRow, col: candidateCol };
         if (isSeaCell(candidate)) {
-          // Also check land polygon
+          // Fast land grid check (O(1))
           const cellCenter = cellToLatLon(candidate);
-          if (!isPointInsideLand(cellCenter.lat, cellCenter.lon)) {
+          if (!isLandFast(cellCenter.lat, cellCenter.lon)) {
             return candidate;
           }
         }
@@ -202,9 +206,9 @@ function getNeighbors(point: GridPoint): GridPoint[] {
 
       const candidate: GridPoint = { row, col };
       if (isSeaCell(candidate)) {
-        // Additional check: verify cell center is not inside a land polygon
+        // Fast O(1) land grid check
         const cellCenter = cellToLatLon(candidate);
-        if (!isPointInsideLand(cellCenter.lat, cellCenter.lon)) {
+        if (!isLandFast(cellCenter.lat, cellCenter.lon)) {
           neighbors.push(candidate);
         }
       }
@@ -313,23 +317,22 @@ function distanceBetween(a: GridPoint, b: GridPoint): number {
 
 /**
  * Check if a point is in navigable sea water
- * Uses DUAL validation: ocean mask grid + 50m land polygon check
- * This catches narrow land features that the coarse grid may miss
+ * Uses HIGH-RESOLUTION pre-computed land grid (0.05° = ~5.5km)
+ * Falls back to polygon check if grid not ready
  * @returns true if point is in sea, false if on land or outside grid
  */
 export function isPointInSea(lat: number, lon: number): boolean {
-  const cell = latLonToCell(lat, lon);
-  if (!cell) return false; // Outside grid bounds
-
-  // Check 1: Ocean mask grid (0.25° resolution)
-  if (!isSeaCell(cell)) {
+  // Primary check: High-resolution land grid (O(1) lookup)
+  // This grid is pre-computed from 50m land polygons at 0.05° resolution
+  if (isLandFast(lat, lon)) {
     return false;
   }
 
-  // Check 2: 50m land polygon check (catches narrow peninsulas like Peloponnese)
-  // This is critical for areas where the coarse grid marks as water
-  // but actually contains narrow land features
-  if (isPointInsideLand(lat, lon)) {
+  // Secondary check: Coarse ocean mask for areas outside land grid
+  const cell = latLonToCell(lat, lon);
+  if (!cell) return false; // Outside grid bounds
+
+  if (!isSeaCell(cell)) {
     return false;
   }
 
@@ -338,10 +341,8 @@ export function isPointInSea(lat: number, lon: number): boolean {
 
 /**
  * Check if a line segment crosses land
- * Uses TRIPLE validation:
- * 1. Endpoint sea checks (ocean mask + land polygons)
- * 2. Coastline intersection check (110m coastline)
- * 3. Dense point sampling with land polygon checks
+ * Uses HIGH-RESOLUTION grid with great circle interpolation
+ * Much faster and more accurate than polygon-based checks
  * @returns true if segment crosses land
  */
 export function segmentCrossesLand(
@@ -350,38 +351,9 @@ export function segmentCrossesLand(
   lat2: number,
   lon2: number
 ): boolean {
-  // Check endpoints first (already includes land polygon check)
-  if (!isPointInSea(lat1, lon1) || !isPointInSea(lat2, lon2)) {
-    return true;
-  }
-
-  // Check 2: Coastline intersection check (fast geometric check)
-  // This catches obvious crossings over coastlines
-  if (coastlineCrossesLand(lat1, lon1, lat2, lon2, 20)) {
-    return true;
-  }
-
-  // Calculate distance to determine number of samples
-  const distance = calculateGreatCircleDistance(lat1, lon1, lat2, lon2);
-
-  // Sample every ~5km to catch narrow land features
-  // Increased density for Mediterranean-style complex coastlines
-  const sampleDistanceKm = 5; // 5km between samples
-  const samples = Math.max(20, Math.ceil(distance * 1.852 / sampleDistanceKm)); // distance is in NM
-
-  // Sample points along the segment with dense land polygon checks
-  for (let i = 1; i < samples; i++) {
-    const t = i / samples;
-    const lat = lat1 + t * (lat2 - lat1);
-    const lon = lon1 + t * (lon2 - lon1);
-
-    // Check both ocean mask AND land polygon
-    if (!isPointInSea(lat, lon)) {
-      return true;
-    }
-  }
-
-  return false;
+  // Use fast pre-computed grid with great circle interpolation
+  // This samples every 3km along the great circle path
+  return segmentCrossesLandFast(lat1, lon1, lat2, lon2);
 }
 
 /**
