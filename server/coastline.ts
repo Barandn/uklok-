@@ -1,6 +1,7 @@
 /**
  * Coastline Detection Module
  * Uses Natural Earth 110m coastline GeoJSON data for route validation
+ * Enhanced with 50m land polygons for point-in-polygon checks
  */
 
 import * as fs from 'fs';
@@ -14,9 +15,10 @@ const __dirname = dirname(__filename);
 interface GeoJSONFeature {
   type: string;
   properties: Record<string, any>;
+  bbox?: number[];
   geometry: {
     type: string;
-    coordinates: number[][][] | number[][][][];
+    coordinates: number[][][] | number[][][][] | number[][];
   };
 }
 
@@ -26,6 +28,7 @@ interface GeoJSONData {
 }
 
 let coastlineData: GeoJSONData | null = null;
+let landPolygonData: GeoJSONData | null = null;
 
 /**
  * Load coastline GeoJSON data (lazy loading)
@@ -40,6 +43,108 @@ function loadCoastlineData(): GeoJSONData {
   coastlineData = JSON.parse(rawData);
   console.log(`[Coastline] Loaded ${coastlineData!.features.length} coastline features`);
   return coastlineData!;
+}
+
+/**
+ * Load 50m land polygon GeoJSON data (lazy loading)
+ * This provides more accurate point-in-polygon checks
+ */
+function loadLandPolygonData(): GeoJSONData {
+  if (landPolygonData) {
+    return landPolygonData;
+  }
+
+  const landPath = path.join(__dirname, 'data', 'ne_50m_land.json');
+  try {
+    const rawData = fs.readFileSync(landPath, 'utf-8');
+    landPolygonData = JSON.parse(rawData);
+    console.log(`[Coastline] Loaded ${landPolygonData!.features.length} land polygon features (50m resolution)`);
+    return landPolygonData!;
+  } catch (error) {
+    console.warn('[Coastline] Failed to load 50m land data, point-in-polygon will be disabled');
+    landPolygonData = { type: 'FeatureCollection', features: [] };
+    return landPolygonData;
+  }
+}
+
+/**
+ * Ray casting algorithm for point-in-polygon check
+ * Returns true if the point is inside the polygon
+ */
+function pointInPolygon(point: number[], polygon: number[][]): boolean {
+  const [x, y] = point; // [lon, lat]
+  let inside = false;
+
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+
+  return inside;
+}
+
+/**
+ * Check if a point is inside any land polygon using 50m resolution data
+ * More accurate than coastline proximity check
+ * @param lat Latitude
+ * @param lon Longitude
+ * @returns true if point is on land
+ */
+export function isPointInsideLand(lat: number, lon: number): boolean {
+  const data = loadLandPolygonData();
+  const point = [lon, lat];
+
+  for (const feature of data.features) {
+    const { geometry, bbox } = feature;
+
+    // Quick bounding box check first (optimization)
+    if (bbox) {
+      const [minLon, minLat, maxLon, maxLat] = bbox;
+      if (lon < minLon || lon > maxLon || lat < minLat || lat > maxLat) {
+        continue;
+      }
+    }
+
+    if (geometry.type === 'Polygon') {
+      const coords = geometry.coordinates as number[][][];
+      // Check outer ring (first ring is the outer boundary)
+      if (pointInPolygon(point, coords[0])) {
+        // Check if inside any hole (inner rings)
+        let inHole = false;
+        for (let i = 1; i < coords.length; i++) {
+          if (pointInPolygon(point, coords[i])) {
+            inHole = true;
+            break;
+          }
+        }
+        if (!inHole) {
+          return true;
+        }
+      }
+    } else if (geometry.type === 'MultiPolygon') {
+      const multiCoords = geometry.coordinates as number[][][][];
+      for (const polygon of multiCoords) {
+        if (pointInPolygon(point, polygon[0])) {
+          let inHole = false;
+          for (let i = 1; i < polygon.length; i++) {
+            if (pointInPolygon(point, polygon[i])) {
+              inHole = true;
+              break;
+            }
+          }
+          if (!inHole) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 /**

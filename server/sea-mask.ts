@@ -1,6 +1,7 @@
 /**
  * Sea/Ocean mask helper
  * Loads a coarse binary raster and exposes helpers to route over navigable water cells.
+ * Enhanced with high-resolution pre-computed land grid for O(1) lookups.
  */
 
 import * as fs from 'fs';
@@ -8,6 +9,11 @@ import * as path from 'path';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { calculateGreatCircleDistance } from './vessel-performance';
+import { isPointInsideLand, routeCrossesLand as coastlineCrossesLand } from './coastline';
+import { isLandFast, segmentCrossesLandFast, initializeLandGrid } from './land-grid';
+
+// Initialize land grid at module load (runs in background)
+initializeLandGrid();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -119,7 +125,14 @@ function isSeaCell(point: GridPoint): boolean {
 
 function findNearestSeaCell(lat: number, lon: number, maxRadius = 3): GridPoint | null {
   const startCell = latLonToCell(lat, lon);
-  if (startCell && isSeaCell(startCell)) return startCell;
+
+  // Check if starting cell is valid sea using fast grid
+  if (startCell && isSeaCell(startCell)) {
+    const cellCenter = cellToLatLon(startCell);
+    if (!isLandFast(cellCenter.lat, cellCenter.lon)) {
+      return startCell;
+    }
+  }
 
   const mask = loadSeaMask();
   const normalizedLon = normalizeLongitude(lon);
@@ -141,7 +154,11 @@ function findNearestSeaCell(lat: number, lon: number, maxRadius = 3): GridPoint 
 
         const candidate: GridPoint = { row: candidateRow, col: candidateCol };
         if (isSeaCell(candidate)) {
-          return candidate;
+          // Fast land grid check (O(1))
+          const cellCenter = cellToLatLon(candidate);
+          if (!isLandFast(cellCenter.lat, cellCenter.lon)) {
+            return candidate;
+          }
         }
       }
     }
@@ -189,7 +206,11 @@ function getNeighbors(point: GridPoint): GridPoint[] {
 
       const candidate: GridPoint = { row, col };
       if (isSeaCell(candidate)) {
-        neighbors.push(candidate);
+        // Fast O(1) land grid check
+        const cellCenter = cellToLatLon(candidate);
+        if (!isLandFast(cellCenter.lat, cellCenter.lon)) {
+          neighbors.push(candidate);
+        }
       }
     }
   }
@@ -296,19 +317,32 @@ function distanceBetween(a: GridPoint, b: GridPoint): number {
 
 /**
  * Check if a point is in navigable sea water
- * Uses the ocean mask grid - more reliable than coastline proximity
+ * Uses HIGH-RESOLUTION pre-computed land grid (0.05° = ~5.5km)
+ * Falls back to polygon check if grid not ready
  * @returns true if point is in sea, false if on land or outside grid
  */
 export function isPointInSea(lat: number, lon: number): boolean {
+  // Primary check: High-resolution land grid (O(1) lookup)
+  // This grid is pre-computed from 50m land polygons at 0.05° resolution
+  if (isLandFast(lat, lon)) {
+    return false;
+  }
+
+  // Secondary check: Coarse ocean mask for areas outside land grid
   const cell = latLonToCell(lat, lon);
   if (!cell) return false; // Outside grid bounds
-  return isSeaCell(cell);
+
+  if (!isSeaCell(cell)) {
+    return false;
+  }
+
+  return true;
 }
 
 /**
  * Check if a line segment crosses land
- * Samples points along the segment based on distance
- * More samples for longer segments to ensure accuracy
+ * Uses HIGH-RESOLUTION grid with great circle interpolation
+ * Much faster and more accurate than polygon-based checks
  * @returns true if segment crosses land
  */
 export function segmentCrossesLand(
@@ -317,32 +351,9 @@ export function segmentCrossesLand(
   lat2: number,
   lon2: number
 ): boolean {
-  // Check endpoints first
-  if (!isPointInSea(lat1, lon1) || !isPointInSea(lat2, lon2)) {
-    return true;
-  }
-
-  // Calculate distance to determine number of samples
-  const distance = calculateGreatCircleDistance(lat1, lon1, lat2, lon2);
-  const mask = loadSeaMask();
-
-  // Sample every ~10-20km (based on resolution) to ensure we don't miss any land
-  // With 0.25 degree resolution (~28km), we want to sample at least every 10km
-  const sampleDistance = mask.resolution * 111 * 0.4; // ~40% of cell size in km
-  const samples = Math.max(10, Math.ceil(distance / sampleDistance));
-
-  // Sample points along the segment
-  for (let i = 1; i < samples; i++) {
-    const t = i / samples;
-    const lat = lat1 + t * (lat2 - lat1);
-    const lon = lon1 + t * (lon2 - lon1);
-
-    if (!isPointInSea(lat, lon)) {
-      return true;
-    }
-  }
-
-  return false;
+  // Use fast pre-computed grid with great circle interpolation
+  // This samples every 3km along the great circle path
+  return segmentCrossesLandFast(lat1, lon1, lat2, lon2);
 }
 
 /**
