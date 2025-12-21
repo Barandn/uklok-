@@ -21,10 +21,21 @@ const __dirname = dirname(__filename);
 const ERDDAP_BASE = "https://oceanwatch.pifsc.noaa.gov/erddap/griddap/ETOPO_2022_v1_15s";
 
 /**
- * Hybrid bathymetry data structure
- * High resolution for critical areas, low resolution for open ocean
+ * Three-tier bathymetry data structure
+ * Ultra-high (~1.1km) for straits, high (~2.8km) for coasts, standard (~11km) for ocean
  */
-interface HybridBathymetryData {
+interface ThreeTierBathymetryData {
+  ultraHighRes: {
+    resolution: number;
+    regions: Array<{
+      name: string;
+      originLat: number;
+      originLon: number;
+      width: number;
+      height: number;
+      depths: number[][];
+    }>;
+  };
   highRes: {
     resolution: number;
     regions: Array<{
@@ -36,7 +47,7 @@ interface HybridBathymetryData {
       depths: number[][];
     }>;
   };
-  lowRes: {
+  standardRes: {
     resolution: number;
     originLat: number;
     originLon: number;
@@ -49,30 +60,33 @@ interface HybridBathymetryData {
 /**
  * Cached local bathymetry data
  */
-let localBathymetry: HybridBathymetryData | null = null;
+let localBathymetry: ThreeTierBathymetryData | null = null;
 let localDataAvailable = false;
 
 /**
  * Load local bathymetry data if available
  */
-function loadLocalBathymetry(): HybridBathymetryData | null {
+function loadLocalBathymetry(): ThreeTierBathymetryData | null {
   if (localBathymetry !== null) return localBathymetry;
 
   const localPath = path.join(__dirname, 'data', 'bathymetry-local.json');
 
   try {
     if (fs.existsSync(localPath)) {
-      console.log('[Bathymetry] Loading hybrid bathymetry data...');
+      console.log('[Bathymetry] Loading three-tier bathymetry data...');
       const raw = fs.readFileSync(localPath, 'utf-8');
       localBathymetry = JSON.parse(raw);
       localDataAvailable = true;
 
-      const highResCount = localBathymetry!.highRes.regions.length;
-      const highResRes = localBathymetry!.highRes.resolution;
-      const lowResSize = `${localBathymetry!.lowRes.width}x${localBathymetry!.lowRes.height}`;
-      const lowResRes = localBathymetry!.lowRes.resolution;
+      const ultraCount = localBathymetry!.ultraHighRes?.regions?.length || 0;
+      const ultraRes = localBathymetry!.ultraHighRes?.resolution || 'N/A';
+      const highCount = localBathymetry!.highRes?.regions?.length || 0;
+      const highRes = localBathymetry!.highRes?.resolution || 'N/A';
+      const stdSize = localBathymetry!.standardRes ?
+        `${localBathymetry!.standardRes.width}x${localBathymetry!.standardRes.height}` : 'N/A';
+      const stdRes = localBathymetry!.standardRes?.resolution || 'N/A';
 
-      console.log(`[Bathymetry] Loaded: ${highResCount} high-res regions (${highResRes}°), global low-res ${lowResSize} (${lowResRes}°)`);
+      console.log(`[Bathymetry] Loaded: ${ultraCount} ultra-high (${ultraRes}°), ${highCount} high (${highRes}°), standard ${stdSize} (${stdRes}°)`);
       return localBathymetry;
     }
   } catch (error) {
@@ -84,34 +98,53 @@ function loadLocalBathymetry(): HybridBathymetryData | null {
 }
 
 /**
- * Get depth from local data - HYBRID LOOKUP
- * First checks high-res regions, then falls back to low-res global grid
+ * Get depth from local data - THREE-TIER LOOKUP
+ * Priority: 1) Ultra-high res, 2) High res, 3) Standard res
  * Returns null if point is outside all data bounds
  */
 function getLocalDepth(lat: number, lon: number): number | null {
   const data = loadLocalBathymetry();
   if (!data) return null;
 
-  // Step 1: Check high-resolution regions first (critical areas)
-  for (const region of data.highRes.regions) {
-    const row = Math.floor((region.originLat - lat) / data.highRes.resolution);
-    const col = Math.floor((lon - region.originLon) / data.highRes.resolution);
+  // Step 1: Check ultra-high resolution regions (straits, canals)
+  if (data.ultraHighRes?.regions) {
+    for (const region of data.ultraHighRes.regions) {
+      const row = Math.floor((region.originLat - lat) / data.ultraHighRes.resolution);
+      const col = Math.floor((lon - region.originLon) / data.ultraHighRes.resolution);
 
-    if (row >= 0 && row < region.height && col >= 0 && col < region.width) {
-      const depth = region.depths[row]?.[col];
-      if (depth !== undefined) {
-        return depth;
+      if (row >= 0 && row < region.height && col >= 0 && col < region.width) {
+        const depth = region.depths[row]?.[col];
+        if (depth !== undefined) {
+          return depth;
+        }
       }
     }
   }
 
-  // Step 2: Fall back to low-resolution global grid
-  const lowRes = data.lowRes;
-  const row = Math.floor((lowRes.originLat - lat) / lowRes.resolution);
-  const col = Math.floor((lon - lowRes.originLon) / lowRes.resolution);
+  // Step 2: Check high resolution regions (coastal areas)
+  if (data.highRes?.regions) {
+    for (const region of data.highRes.regions) {
+      const row = Math.floor((region.originLat - lat) / data.highRes.resolution);
+      const col = Math.floor((lon - region.originLon) / data.highRes.resolution);
 
-  if (row >= 0 && row < lowRes.height && col >= 0 && col < lowRes.width) {
-    return lowRes.depths[row]?.[col] ?? null;
+      if (row >= 0 && row < region.height && col >= 0 && col < region.width) {
+        const depth = region.depths[row]?.[col];
+        if (depth !== undefined) {
+          return depth;
+        }
+      }
+    }
+  }
+
+  // Step 3: Fall back to standard resolution global grid
+  if (data.standardRes) {
+    const stdRes = data.standardRes;
+    const row = Math.floor((stdRes.originLat - lat) / stdRes.resolution);
+    const col = Math.floor((lon - stdRes.originLon) / stdRes.resolution);
+
+    if (row >= 0 && row < stdRes.height && col >= 0 && col < stdRes.width) {
+      return stdRes.depths[row]?.[col] ?? null;
+    }
   }
 
   return null; // Outside all data bounds
