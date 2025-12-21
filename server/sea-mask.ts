@@ -176,8 +176,17 @@ function getNeighbors(point: GridPoint): GridPoint[] {
     for (let dc = -1; dc <= 1; dc++) {
       if (dr === 0 && dc === 0) continue;
       const row = point.row + dr;
-      const col = point.col + dc;
-      if (row < 0 || col < 0 || row >= mask.height || col >= mask.width) continue;
+      let col = point.col + dc;
+
+      // Skip invalid rows (can't wrap around poles)
+      if (row < 0 || row >= mask.height) continue;
+
+      // WRAP AROUND DATELINE: Allow Pacific routes to cross 180° longitude
+      // When col goes negative, wrap to the right side of the grid
+      // When col exceeds width, wrap to the left side
+      if (col < 0) col = mask.width + col;
+      if (col >= mask.width) col = col - mask.width;
+
       const candidate: GridPoint = { row, col };
       if (isSeaCell(candidate)) {
         neighbors.push(candidate);
