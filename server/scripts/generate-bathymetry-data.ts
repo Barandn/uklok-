@@ -16,34 +16,79 @@ const __dirname = dirname(__filename);
 // NOAA ERDDAP ETOPO 2022 endpoint
 const ERDDAP_BASE = "https://oceanwatch.pifsc.noaa.gov/erddap/griddap/ETOPO_2022_v1_15s";
 
-// Configuration
-// 0.5° resolution = ~55km at equator - good balance of accuracy vs file size
-// Global coverage: 720 x 360 = 259,200 points = ~1.5-2 MB JSON
-const RESOLUTION = 0.5;
+// Configuration - HYBRID RESOLUTION
+// Critical areas: 0.05° (~5.5km) - can see straits, narrow passages
+// Open ocean: 0.25° (~28km) - sufficient for deep water
 
-// Global coverage - split into chunks to avoid API timeouts
-const REGIONS = [
-  // Atlantic & Europe
-  { name: 'North Atlantic & Europe', minLat: 30, maxLat: 70, minLon: -80, maxLon: 30 },
-  { name: 'South Atlantic', minLat: -60, maxLat: 30, minLon: -70, maxLon: 20 },
+// Critical maritime areas - HIGH RESOLUTION (0.05°)
+// These include straits, narrow passages, busy shipping lanes
+const HIGH_RES_REGIONS = [
+  // Mediterranean & Aegean
+  { name: 'Mediterranean West', minLat: 35, maxLat: 44, minLon: -6, maxLon: 10 },
+  { name: 'Mediterranean Central', minLat: 35, maxLat: 44, minLon: 9, maxLon: 20 },
+  { name: 'Adriatic Sea', minLat: 39, maxLat: 46, minLon: 12, maxLon: 20 },
+  { name: 'Aegean Sea', minLat: 35, maxLat: 42, minLon: 22, maxLon: 30 },
+  { name: 'Marmara & Turkish Straits', minLat: 39, maxLat: 42, minLon: 26, maxLon: 32 },
+  { name: 'Eastern Mediterranean', minLat: 31, maxLat: 37, minLon: 28, maxLon: 36 },
 
-  // Mediterranean & Middle East
-  { name: 'Mediterranean & Middle East', minLat: 10, maxLat: 50, minLon: 20, maxLon: 70 },
+  // Critical Straits
+  { name: 'Gibraltar Strait', minLat: 35, maxLat: 37, minLon: -7, maxLon: -4 },
+  { name: 'Suez & Red Sea North', minLat: 27, maxLat: 32, minLon: 32, maxLon: 35 },
+  { name: 'Bab el-Mandeb', minLat: 11, maxLat: 14, minLon: 42, maxLon: 45 },
+  { name: 'Hormuz Strait', minLat: 25, maxLat: 28, minLon: 54, maxLon: 58 },
+
+  // Southeast Asia - critical shipping lanes
+  { name: 'Malacca Strait', minLat: 0, maxLat: 8, minLon: 98, maxLon: 105 },
+  { name: 'Singapore Strait', minLat: 0, maxLat: 3, minLon: 103, maxLon: 105 },
+  { name: 'Sunda Strait', minLat: -7, maxLat: -5, minLon: 104, maxLon: 107 },
+  { name: 'Lombok Strait', minLat: -9, maxLat: -7, minLon: 115, maxLon: 117 },
+  { name: 'South China Sea', minLat: 5, maxLat: 22, minLon: 105, maxLon: 120 },
+  { name: 'Taiwan Strait', minLat: 22, maxLat: 26, minLon: 117, maxLon: 122 },
+
+  // East Asia
+  { name: 'Korea Strait', minLat: 33, maxLat: 36, minLon: 127, maxLon: 132 },
+  { name: 'Japan Inland Sea', minLat: 33, maxLat: 35, minLon: 131, maxLon: 136 },
+  { name: 'Tokyo Bay area', minLat: 34, maxLat: 36, minLon: 139, maxLon: 141 },
+
+  // Europe - Northern
+  { name: 'English Channel', minLat: 49, maxLat: 52, minLon: -6, maxLon: 3 },
+  { name: 'North Sea South', minLat: 51, maxLat: 56, minLon: -1, maxLon: 10 },
+  { name: 'Baltic Entrances', minLat: 54, maxLat: 58, minLon: 9, maxLon: 15 },
+  { name: 'Baltic Sea', minLat: 53, maxLat: 66, minLon: 14, maxLon: 30 },
+
+  // Americas
+  { name: 'Panama Canal area', minLat: 7, maxLat: 10, minLon: -80, maxLon: -77 },
+  { name: 'US East Coast ports', minLat: 38, maxLat: 42, minLon: -76, maxLon: -70 },
+  { name: 'Gulf of Mexico', minLat: 25, maxLat: 30, minLon: -98, maxLon: -88 },
+  { name: 'Caribbean passages', minLat: 17, maxLat: 22, minLon: -75, maxLon: -65 },
+
+  // Other critical areas
+  { name: 'Persian Gulf', minLat: 23, maxLat: 30, minLon: 48, maxLon: 57 },
+  { name: 'Red Sea', minLat: 12, maxLat: 28, minLon: 32, maxLon: 44 },
+  { name: 'Black Sea', minLat: 40, maxLat: 47, minLon: 27, maxLon: 42 },
+];
+
+// Open ocean areas - LOWER RESOLUTION (0.25°)
+const LOW_RES_REGIONS = [
+  // Atlantic Ocean
+  { name: 'North Atlantic', minLat: 20, maxLat: 65, minLon: -80, maxLon: -5 },
+  { name: 'South Atlantic', minLat: -60, maxLat: 20, minLon: -70, maxLon: 20 },
 
   // Indian Ocean
-  { name: 'Indian Ocean', minLat: -40, maxLat: 30, minLon: 40, maxLon: 100 },
+  { name: 'Indian Ocean', minLat: -40, maxLat: 25, minLon: 40, maxLon: 100 },
 
-  // Pacific - West
-  { name: 'West Pacific & Asia', minLat: -10, maxLat: 60, minLon: 100, maxLon: 150 },
+  // Pacific Ocean
+  { name: 'West Pacific', minLat: -20, maxLat: 50, minLon: 120, maxLon: 180 },
+  { name: 'Central Pacific', minLat: -40, maxLat: 40, minLon: -180, maxLon: -120 },
+  { name: 'East Pacific', minLat: -60, maxLat: 60, minLon: -120, maxLon: -80 },
 
-  // Pacific - Central & East
-  { name: 'Central Pacific', minLat: -40, maxLat: 40, minLon: 150, maxLon: -120 },
-  { name: 'East Pacific', minLat: -60, maxLat: 60, minLon: -120, maxLon: -70 },
-
-  // Polar regions
-  { name: 'Arctic', minLat: 60, maxLat: 85, minLon: -180, maxLon: 180 },
-  { name: 'Southern Ocean', minLat: -80, maxLat: -40, minLon: -180, maxLon: 180 },
+  // Polar
+  { name: 'Arctic Ocean', minLat: 65, maxLat: 85, minLon: -180, maxLon: 180 },
+  { name: 'Southern Ocean', minLat: -75, maxLat: -40, minLon: -180, maxLon: 180 },
 ];
+
+const HIGH_RESOLUTION = 0.05;  // ~5.5km - critical areas
+const LOW_RESOLUTION = 0.25;   // ~28km - open ocean
 
 interface BathymetryData {
   originLat: number;
@@ -249,78 +294,183 @@ function saveData(data: BathymetryData, filename: string): void {
 }
 
 /**
- * Main function
+ * Hybrid bathymetry data structure
+ * Stores both high-res and low-res grids for different areas
+ */
+interface HybridBathymetryData {
+  // High resolution data for critical areas
+  highRes: {
+    resolution: number;
+    regions: Array<{
+      name: string;
+      originLat: number;
+      originLon: number;
+      width: number;
+      height: number;
+      depths: number[][];
+    }>;
+  };
+  // Low resolution data for open ocean
+  lowRes: {
+    resolution: number;
+    originLat: number;
+    originLon: number;
+    width: number;
+    height: number;
+    depths: number[][];
+  };
+}
+
+/**
+ * Save hybrid bathymetry data
+ */
+function saveHybridData(data: HybridBathymetryData): void {
+  const outputPath = path.join(__dirname, '..', 'data', 'bathymetry-local.json');
+
+  const jsonStr = JSON.stringify(data);
+  const sizeMB = (jsonStr.length / 1024 / 1024).toFixed(2);
+
+  fs.writeFileSync(outputPath, jsonStr);
+  console.log(`\nSaved to: ${outputPath}`);
+  console.log(`File size: ${sizeMB} MB`);
+}
+
+/**
+ * Main function - generates hybrid resolution bathymetry data
  */
 async function main(): Promise<void> {
-  console.log('=== Local Bathymetry Data Generator ===\n');
-  console.log(`Resolution: ${RESOLUTION}° (~${(RESOLUTION * 111).toFixed(1)}km at equator)`);
+  console.log('=== Hybrid Resolution Bathymetry Generator ===\n');
+  console.log(`High resolution: ${HIGH_RESOLUTION}° (~${(HIGH_RESOLUTION * 111).toFixed(1)}km) - critical areas`);
+  console.log(`Low resolution: ${LOW_RESOLUTION}° (~${(LOW_RESOLUTION * 111).toFixed(1)}km) - open ocean\n`);
 
-  // Collect all depths from all regions
-  const allDepths = new Map<string, number>();
+  const hybridData: HybridBathymetryData = {
+    highRes: {
+      resolution: HIGH_RESOLUTION,
+      regions: [],
+    },
+    lowRes: {
+      resolution: LOW_RESOLUTION,
+      originLat: 85,
+      originLon: -180,
+      width: 0,
+      height: 0,
+      depths: [],
+    },
+  };
 
-  // Global bounds
-  let globalMinLat = 90;
-  let globalMaxLat = -90;
-  let globalMinLon = 180;
-  let globalMaxLon = -180;
+  // Download HIGH RESOLUTION regions (critical areas)
+  console.log('=== HIGH RESOLUTION REGIONS ===');
+  let totalHighResPoints = 0;
 
-  for (const region of REGIONS) {
+  for (const region of HIGH_RES_REGIONS) {
     const depths = await downloadRegion(
       region.name,
       region.minLat,
       region.maxLat,
       region.minLon,
       region.maxLon,
-      RESOLUTION
+      HIGH_RESOLUTION
     );
 
-    // Merge into global map
-    for (const [key, depth] of depths) {
-      allDepths.set(key, depth);
-    }
+    if (depths.size > 0) {
+      // Convert to grid
+      const grid = convertToGrid(
+        depths,
+        region.minLat,
+        region.maxLat,
+        region.minLon,
+        region.maxLon,
+        HIGH_RESOLUTION
+      );
 
-    // Update global bounds
-    globalMinLat = Math.min(globalMinLat, region.minLat);
-    globalMaxLat = Math.max(globalMaxLat, region.maxLat);
-    globalMinLon = Math.min(globalMinLon, region.minLon);
-    globalMaxLon = Math.max(globalMaxLon, region.maxLon);
+      hybridData.highRes.regions.push({
+        name: region.name,
+        originLat: region.maxLat,
+        originLon: region.minLon,
+        width: grid.width,
+        height: grid.height,
+        depths: grid.depths,
+      });
+
+      totalHighResPoints += grid.width * grid.height;
+    }
   }
 
-  console.log(`\nTotal downloaded: ${allDepths.size} depth points`);
-  console.log(`Global bounds: (${globalMinLat}-${globalMaxLat}°N, ${globalMinLon}-${globalMaxLon}°E)`);
+  console.log(`\nHigh-res total: ${totalHighResPoints.toLocaleString()} points in ${hybridData.highRes.regions.length} regions`);
 
-  // Convert to grid format
-  const gridData = convertToGrid(
-    allDepths,
-    globalMinLat,
-    globalMaxLat,
-    globalMinLon,
-    globalMaxLon,
-    RESOLUTION
+  // Download LOW RESOLUTION (global coverage for open ocean)
+  console.log('\n=== LOW RESOLUTION REGIONS (Open Ocean) ===');
+  const allLowResDepths = new Map<string, number>();
+
+  for (const region of LOW_RES_REGIONS) {
+    const depths = await downloadRegion(
+      region.name,
+      region.minLat,
+      region.maxLat,
+      region.minLon,
+      region.maxLon,
+      LOW_RESOLUTION
+    );
+
+    for (const [key, depth] of depths) {
+      allLowResDepths.set(key, depth);
+    }
+  }
+
+  // Convert low-res to global grid
+  const lowResGrid = convertToGrid(
+    allLowResDepths,
+    -75,  // Global min lat
+    85,   // Global max lat
+    -180, // Global min lon
+    180,  // Global max lon
+    LOW_RESOLUTION
   );
 
-  // Save data
-  saveData(gridData, 'bathymetry-local.json');
+  hybridData.lowRes = {
+    resolution: LOW_RESOLUTION,
+    originLat: 85,
+    originLon: -180,
+    width: lowResGrid.width,
+    height: lowResGrid.height,
+    depths: lowResGrid.depths,
+  };
 
-  // Print statistics
-  let landCells = 0;
-  let shallowCells = 0;
-  let deepCells = 0;
+  console.log(`\nLow-res total: ${(lowResGrid.width * lowResGrid.height).toLocaleString()} points`);
 
-  for (const row of gridData.depths) {
-    for (const depth of row) {
-      if (depth === 0) landCells++;
-      else if (depth < 50) shallowCells++;
-      else deepCells++;
+  // Save hybrid data
+  saveHybridData(hybridData);
+
+  // Statistics
+  let highResLand = 0, highResShallow = 0, highResDeep = 0;
+  for (const region of hybridData.highRes.regions) {
+    for (const row of region.depths) {
+      for (const d of row) {
+        if (d === 0) highResLand++;
+        else if (d < 50) highResShallow++;
+        else highResDeep++;
+      }
     }
   }
 
-  const total = gridData.width * gridData.height;
-  console.log('\nStatistics:');
-  console.log(`  Grid size: ${gridData.width} x ${gridData.height} = ${total.toLocaleString()} cells`);
-  console.log(`  Land cells: ${landCells.toLocaleString()} (${(landCells / total * 100).toFixed(1)}%)`);
-  console.log(`  Shallow (<50m): ${shallowCells.toLocaleString()} (${(shallowCells / total * 100).toFixed(1)}%)`);
-  console.log(`  Deep (≥50m): ${deepCells.toLocaleString()} (${(deepCells / total * 100).toFixed(1)}%)`);
+  let lowResLand = 0, lowResShallow = 0, lowResDeep = 0;
+  for (const row of hybridData.lowRes.depths) {
+    for (const d of row) {
+      if (d === 0) lowResLand++;
+      else if (d < 50) lowResShallow++;
+      else lowResDeep++;
+    }
+  }
+
+  console.log('\n=== STATISTICS ===');
+  console.log('\nHigh Resolution (Critical Areas):');
+  console.log(`  Regions: ${hybridData.highRes.regions.length}`);
+  console.log(`  Total points: ${totalHighResPoints.toLocaleString()}`);
+  console.log(`  Land: ${highResLand.toLocaleString()}, Shallow: ${highResShallow.toLocaleString()}, Deep: ${highResDeep.toLocaleString()}`);
+
+  console.log('\nLow Resolution (Open Ocean):');
+  console.log(`  Grid: ${lowResGrid.width} x ${lowResGrid.height}`);
+  console.log(`  Land: ${lowResLand.toLocaleString()}, Shallow: ${lowResShallow.toLocaleString()}, Deep: ${lowResDeep.toLocaleString()}`);
 
   console.log('\nDone!');
 }

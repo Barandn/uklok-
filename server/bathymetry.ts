@@ -21,38 +21,58 @@ const __dirname = dirname(__filename);
 const ERDDAP_BASE = "https://oceanwatch.pifsc.noaa.gov/erddap/griddap/ETOPO_2022_v1_15s";
 
 /**
- * Local bathymetry data structure
+ * Hybrid bathymetry data structure
+ * High resolution for critical areas, low resolution for open ocean
  */
-interface LocalBathymetryData {
-  originLat: number;
-  originLon: number;
-  resolution: number;
-  width: number;
-  height: number;
-  depths: number[][];
+interface HybridBathymetryData {
+  highRes: {
+    resolution: number;
+    regions: Array<{
+      name: string;
+      originLat: number;
+      originLon: number;
+      width: number;
+      height: number;
+      depths: number[][];
+    }>;
+  };
+  lowRes: {
+    resolution: number;
+    originLat: number;
+    originLon: number;
+    width: number;
+    height: number;
+    depths: number[][];
+  };
 }
 
 /**
  * Cached local bathymetry data
  */
-let localBathymetry: LocalBathymetryData | null = null;
+let localBathymetry: HybridBathymetryData | null = null;
 let localDataAvailable = false;
 
 /**
  * Load local bathymetry data if available
  */
-function loadLocalBathymetry(): LocalBathymetryData | null {
+function loadLocalBathymetry(): HybridBathymetryData | null {
   if (localBathymetry !== null) return localBathymetry;
 
   const localPath = path.join(__dirname, 'data', 'bathymetry-local.json');
 
   try {
     if (fs.existsSync(localPath)) {
-      console.log('[Bathymetry] Loading local bathymetry data...');
+      console.log('[Bathymetry] Loading hybrid bathymetry data...');
       const raw = fs.readFileSync(localPath, 'utf-8');
       localBathymetry = JSON.parse(raw);
       localDataAvailable = true;
-      console.log(`[Bathymetry] Loaded local data: ${localBathymetry!.width}x${localBathymetry!.height} grid, ${localBathymetry!.resolution}° resolution`);
+
+      const highResCount = localBathymetry!.highRes.regions.length;
+      const highResRes = localBathymetry!.highRes.resolution;
+      const lowResSize = `${localBathymetry!.lowRes.width}x${localBathymetry!.lowRes.height}`;
+      const lowResRes = localBathymetry!.lowRes.resolution;
+
+      console.log(`[Bathymetry] Loaded: ${highResCount} high-res regions (${highResRes}°), global low-res ${lowResSize} (${lowResRes}°)`);
       return localBathymetry;
     }
   } catch (error) {
@@ -64,23 +84,37 @@ function loadLocalBathymetry(): LocalBathymetryData | null {
 }
 
 /**
- * Get depth from local data
- * Returns null if point is outside local data bounds
+ * Get depth from local data - HYBRID LOOKUP
+ * First checks high-res regions, then falls back to low-res global grid
+ * Returns null if point is outside all data bounds
  */
 function getLocalDepth(lat: number, lon: number): number | null {
   const data = loadLocalBathymetry();
   if (!data) return null;
 
-  // Calculate grid position
-  const row = Math.floor((data.originLat - lat) / data.resolution);
-  const col = Math.floor((lon - data.originLon) / data.resolution);
+  // Step 1: Check high-resolution regions first (critical areas)
+  for (const region of data.highRes.regions) {
+    const row = Math.floor((region.originLat - lat) / data.highRes.resolution);
+    const col = Math.floor((lon - region.originLon) / data.highRes.resolution);
 
-  // Check bounds
-  if (row < 0 || row >= data.height || col < 0 || col >= data.width) {
-    return null; // Outside local data bounds
+    if (row >= 0 && row < region.height && col >= 0 && col < region.width) {
+      const depth = region.depths[row]?.[col];
+      if (depth !== undefined) {
+        return depth;
+      }
+    }
   }
 
-  return data.depths[row]?.[col] ?? null;
+  // Step 2: Fall back to low-resolution global grid
+  const lowRes = data.lowRes;
+  const row = Math.floor((lowRes.originLat - lat) / lowRes.resolution);
+  const col = Math.floor((lon - lowRes.originLon) / lowRes.resolution);
+
+  if (row >= 0 && row < lowRes.height && col >= 0 && col < lowRes.width) {
+    return lowRes.depths[row]?.[col] ?? null;
+  }
+
+  return null; // Outside all data bounds
 }
 
 /**
