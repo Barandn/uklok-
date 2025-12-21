@@ -220,50 +220,57 @@ export const appRouter = router({
         weatherEnabled: z.boolean().default(false),
       }))
       .mutation(async ({ input }) => {
-        const { runGeneticOptimization } = await import("./genetic-algorithm");
-        const { DigitalTwin } = await import("./vessel-performance");
+        try {
+          const { runGeneticOptimization } = await import("./genetic-algorithm");
+          const { DigitalTwin } = await import("./vessel-performance");
 
-        // Gemi bilgilerini al veya default kullan
-        const vesselData = input.vessel || defaultVessels[0];
+          // Gemi bilgilerini al veya default kullan
+          const vesselData = input.vessel || defaultVessels[0];
 
-        const digitalTwin = new DigitalTwin({
-          dwt: vesselData.dwt,
-          length: vesselData.length || 200,
-          beam: vesselData.beam || 30,
-          draft: vesselData.draft || 10,
-          serviceSpeed: vesselData.serviceSpeed,
-          fuelType: vesselData.fuelType,
-          fuelConsumptionRate: vesselData.fuelConsumptionRate || 50,
-          enginePower: vesselData.enginePower || 10000,
-        });
+          const digitalTwin = new DigitalTwin({
+            dwt: vesselData.dwt,
+            length: vesselData.length || 200,
+            beam: vesselData.beam || 30,
+            draft: vesselData.draft || 10,
+            serviceSpeed: vesselData.serviceSpeed,
+            fuelType: vesselData.fuelType,
+            fuelConsumptionRate: vesselData.fuelConsumptionRate || 50,
+            enginePower: vesselData.enginePower || 10000,
+          });
 
-        // Draft + güvenlik payı kadar minimum derinlik
-        const minDepthMeters = Math.max(20, (digitalTwin.vessel.draft || 10) * 2);
+          // Draft + güvenlik payı kadar minimum derinlik
+          const minDepthMeters = Math.max(20, (digitalTwin.vessel.draft || 10) * 2);
 
-        const result = await runGeneticOptimization({
-          startLat: input.startLat,
-          startLon: input.startLon,
-          endLat: input.endLat,
-          endLon: input.endLon,
-          vessel: digitalTwin,
-          populationSize: Math.min(input.populationSize, 50),
-          generations: Math.min(input.generations, 30),
-          mutationRate: 0.2,
-          crossoverRate: 0.8,
-          eliteCount: 2,
-          numWaypoints: 6,
-          weatherEnabled: input.weatherEnabled,
-          avoidShallowWater: true,
-          minDepth: minDepthMeters,
-        });
+          const result = await runGeneticOptimization({
+            startLat: input.startLat,
+            startLon: input.startLon,
+            endLat: input.endLat,
+            endLon: input.endLon,
+            vessel: digitalTwin,
+            populationSize: Math.min(input.populationSize, 50),
+            generations: Math.min(input.generations, 30),
+            mutationRate: 0.2,
+            crossoverRate: 0.8,
+            eliteCount: 2,
+            numWaypoints: 6,
+            weatherEnabled: input.weatherEnabled,
+            avoidShallowWater: true,
+            minDepth: minDepthMeters,
+          });
 
-        // Anlık sonuç döndür (DB'ye kaydetmeden)
-        return {
-          ...result,
-          algorithm: 'GENETIC',
-          vessel: vesselData,
-          calculatedAt: new Date().toISOString(),
-        };
+          // Anlık sonuç döndür (DB'ye kaydetmeden)
+          return {
+            ...result,
+            algorithm: 'GENETIC',
+            vessel: vesselData,
+            calculatedAt: new Date().toISOString(),
+          };
+        } catch (error) {
+          console.error('[Optimization] Genetic algorithm error:', error);
+          throw new Error(
+            `Rota hesaplanamadı: ${error instanceof Error ? error.message : 'Bilinmeyen hata'}`
+          );
+        }
       }),
 
     // A* algoritması
