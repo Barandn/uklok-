@@ -5,6 +5,10 @@
 
 import axios from "axios";
 import { distanceToCoastlineKm, isPointOnLand as isCoastlinePointOnLand } from "./coastline";
+import { checkDepthSync as bathymetryCheckDepth } from "./bathymetry";
+
+// Track if we've already logged bathymetry warning
+let bathymetryWarningLogged = false;
 
 /**
  * Hava durumu veri yapısı
@@ -236,11 +240,14 @@ export async function fetchWeatherAlongRoute(
 export function checkDepth(lat: number, lon: number): number {
   // Try to get real depth from cache (via bathymetry module)
   try {
-    const { checkDepthSync } = require('./bathymetry');
-    return checkDepthSync(lat, lon);
+    return bathymetryCheckDepth(lat, lon);
   } catch (error) {
     // Fallback to old estimation if bathymetry module fails
-    console.warn('[Weather] Bathymetry module unavailable, using fallback');
+    // Only log warning once to avoid spam
+    if (!bathymetryWarningLogged) {
+      console.warn('[Weather] Bathymetry module unavailable, using fallback');
+      bathymetryWarningLogged = true;
+    }
     return checkDepthFallback(lat, lon);
   }
 }
