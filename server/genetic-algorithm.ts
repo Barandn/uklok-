@@ -7,6 +7,8 @@
 import { DigitalTwin, calculateGreatCircleDistance, calculateBearing, calculateDestinationPoint } from "./vessel-performance";
 import { WeatherData, fetchCombinedWeather, checkDepth } from "./weather";
 import { isPointInSea, segmentCrossesLand, validateSeaRoute, findOceanPath } from './sea-mask';
+// Import 50m land polygon checks for additional validation
+import { segmentCrossesLandFast, isLandFast } from './land-grid';
 
 /**
  * Maximum attempts for resampling waypoints when validation fails
@@ -28,7 +30,10 @@ function isDefinitelyInSea(lat: number, lon: number): boolean {
 
 /**
  * Check if a segment between two points is valid (no land crossing, adequate depth)
- * Uses high-resolution sea-mask with distance-adaptive sampling
+ * Uses TRIPLE validation for maximum accuracy:
+ * 1. Ocean mask endpoint check
+ * 2. Sea mask segment validation (includes 50m polygon check)
+ * 3. Direct 50m land polygon segment check (catches narrow peninsulas)
  * @param from Start point
  * @param to End point
  * @param minDepth Minimum required depth (ship's draft)
@@ -41,12 +46,24 @@ function isSegmentValid(
   minDepth: number,
   checkShallowWater: boolean
 ): boolean {
-  // Check 1: Endpoint validation
+  // Check 1: Endpoint validation using ocean mask
   if (!isDefinitelyInSea(from.lat, from.lon) || !isDefinitelyInSea(to.lat, to.lon)) {
     return false;
   }
 
-  // Check 2: Sea mask validation with distance-adaptive sampling
+  // Check 2: Endpoint validation using 50m land polygons
+  // This catches points that ocean mask misses due to low resolution
+  if (isLandFast(from.lat, from.lon) || isLandFast(to.lat, to.lon)) {
+    return false;
+  }
+
+  // Check 3: CRITICAL - Direct 50m land polygon segment check
+  // This catches narrow peninsulas like Calabria that ocean mask misses
+  if (segmentCrossesLandFast(from.lat, from.lon, to.lat, to.lon)) {
+    return false;
+  }
+
+  // Check 4: Sea mask validation (includes its own 50m polygon check now)
   if (segmentCrossesLand(from.lat, from.lon, to.lat, to.lon)) {
     return false;
   }
@@ -108,14 +125,15 @@ const MAX_SEA_VALID_PATH_CALLS = 100;
  * Uses recursive midpoint subdivision to find sea-valid path
  * Enhanced to handle complex Mediterranean routes (around Italy, Greece, etc.)
  *
- * OPTIMIZED: Reduced offsets and added call limit to prevent hangs
+ * ENHANCED: Uses larger offsets and more directions for routing around
+ * large peninsulas like Calabria, Peloponnese, etc.
  */
 function findSeaValidPath(
   from: { lat: number; lon: number },
   to: { lat: number; lon: number },
   minDepth: number,
   checkShallowWater: boolean,
-  maxDepth: number = 3,  // Reduced from 4 to limit recursion
+  maxDepth: number = 4,
   isTopLevel: boolean = true
 ): Array<{ lat: number; lon: number }> {
   // Reset call counter at top level
@@ -126,8 +144,8 @@ function findSeaValidPath(
   // Increment and check call limit
   seaValidPathCallCount++;
   if (seaValidPathCallCount > MAX_SEA_VALID_PATH_CALLS) {
-    console.warn(`[findSeaValidPath] Call limit reached (${MAX_SEA_VALID_PATH_CALLS}), returning midpoint`);
-    return [{ lat: (from.lat + to.lat) / 2, lon: (from.lon + to.lon) / 2 }];
+    console.warn(`[findSeaValidPath] Call limit reached (${MAX_SEA_VALID_PATH_CALLS}), will use A* fallback`);
+    return []; // Return empty to trigger A* fallback instead of invalid midpoint
   }
 
   // If segment is already valid, return empty (no intermediate points needed)
@@ -136,8 +154,9 @@ function findSeaValidPath(
   }
 
   if (maxDepth <= 0) {
-    // Can't find valid path, return midpoint as best effort
-    return [{ lat: (from.lat + to.lat) / 2, lon: (from.lon + to.lon) / 2 }];
+    // Can't find valid path, return empty to trigger A* fallback
+    console.warn(`[findSeaValidPath] Max depth reached, will use A* fallback`);
+    return [];
   }
 
   // Try different offsets to find a valid intermediate point
@@ -148,9 +167,10 @@ function findSeaValidPath(
   const bearing = calculateBearing(from.lat, from.lon, to.lat, to.lon);
   const distance = calculateGreatCircleDistance(from.lat, from.lon, to.lat, to.lon);
 
-  // OPTIMIZED: Reduced number of offsets to try (was 9x6=54, now 5x4=20)
-  const offsets = [0.1, 0.2, 0.3, 0.5, 0.7]; // Fraction of segment distance
-  const directions = [90, -90, 45, -45]; // Multiple directions
+  // ENHANCED: Much larger offsets for routing around large land masses
+  // Calabria requires ~100-150km detour, so we need offsets up to 2x segment distance
+  const offsets = [0.2, 0.4, 0.6, 0.8, 1.0, 1.5, 2.0]; // Fraction of segment distance
+  const directions = [90, -90, 45, -45, 135, -135, 180]; // More directions including south
 
   for (const offset of offsets) {
     for (const dir of directions) {
@@ -158,52 +178,63 @@ function findSeaValidPath(
       const offsetDistance = distance * offset;
       const candidate = calculateDestinationPoint(midLat, midLon, offsetDistance, offsetBearing);
 
-      // Check if candidate point is in valid water
-      if (isPointInSea(candidate.lat, candidate.lon)) {
-        const depth = checkDepth(candidate.lat, candidate.lon);
-        if (depth > 0 && (!checkShallowWater || depth >= minDepth)) {
-          // Check if segments to/from candidate are valid
-          const toCandidate = isSegmentValid(from, candidate, minDepth, checkShallowWater);
-          const fromCandidate = isSegmentValid(candidate, to, minDepth, checkShallowWater);
+      // Check if candidate point is in valid water (both ocean mask AND 50m polygons)
+      if (!isPointInSea(candidate.lat, candidate.lon)) continue;
+      if (isLandFast(candidate.lat, candidate.lon)) continue;
 
-          if (toCandidate && fromCandidate) {
-            return [candidate];
+      const depth = checkDepth(candidate.lat, candidate.lon);
+      if (depth <= 0) continue;
+      if (checkShallowWater && depth < minDepth) continue;
+
+      // Check if segments to/from candidate are valid
+      const toCandidate = isSegmentValid(from, candidate, minDepth, checkShallowWater);
+      const fromCandidate = isSegmentValid(candidate, to, minDepth, checkShallowWater);
+
+      if (toCandidate && fromCandidate) {
+        console.log(`[findSeaValidPath] Found valid intermediate at offset ${offset}x, dir ${dir}`);
+        return [candidate];
+      }
+
+      // If only one direction is invalid, recursively fix it (with call limit check)
+      if ((toCandidate || fromCandidate) && seaValidPathCallCount < MAX_SEA_VALID_PATH_CALLS) {
+        const result: Array<{ lat: number; lon: number }> = [];
+
+        if (!toCandidate) {
+          const beforePts = findSeaValidPath(from, candidate, minDepth, checkShallowWater, maxDepth - 1, false);
+          if (beforePts.length === 0 && !isSegmentValid(from, candidate, minDepth, checkShallowWater)) {
+            continue; // This candidate doesn't work
           }
-
-          // If only one direction is invalid, recursively fix it (with call limit check)
-          if ((toCandidate || fromCandidate) && seaValidPathCallCount < MAX_SEA_VALID_PATH_CALLS) {
-            const result: Array<{ lat: number; lon: number }> = [];
-
-            if (!toCandidate) {
-              result.push(...findSeaValidPath(from, candidate, minDepth, checkShallowWater, maxDepth - 1, false));
-            }
-            result.push(candidate);
-            if (!fromCandidate) {
-              result.push(...findSeaValidPath(candidate, to, minDepth, checkShallowWater, maxDepth - 1, false));
-            }
-
-            // Validate the entire result path
-            let resultValid = true;
-            const fullPath = [from, ...result, to];
-            for (let i = 0; i < fullPath.length - 1; i++) {
-              if (!isSegmentValid(fullPath[i], fullPath[i + 1], minDepth, checkShallowWater)) {
-                resultValid = false;
-                break;
-              }
-            }
-
-            if (resultValid) {
-              return result;
-            }
+          result.push(...beforePts);
+        }
+        result.push(candidate);
+        if (!fromCandidate) {
+          const afterPts = findSeaValidPath(candidate, to, minDepth, checkShallowWater, maxDepth - 1, false);
+          if (afterPts.length === 0 && !isSegmentValid(candidate, to, minDepth, checkShallowWater)) {
+            continue; // This candidate doesn't work
           }
+          result.push(...afterPts);
+        }
+
+        // Validate the entire result path
+        let resultValid = true;
+        const fullPath = [from, ...result, to];
+        for (let i = 0; i < fullPath.length - 1; i++) {
+          if (!isSegmentValid(fullPath[i], fullPath[i + 1], minDepth, checkShallowWater)) {
+            resultValid = false;
+            break;
+          }
+        }
+
+        if (resultValid) {
+          return result;
         }
       }
     }
   }
 
-  // OPTIMIZED: Reduced grid search (was 7x7=49, now 5x5=25)
-  const gridOffsets = [-2, -1, 0, 1, 2];
-  const gridStep = 1.0; // degrees
+  // ENHANCED: Larger grid search for complex cases
+  const gridOffsets = [-4, -3, -2, -1, 0, 1, 2, 3, 4];
+  const gridStep = 0.75; // degrees (~83km)
 
   for (const latOffset of gridOffsets) {
     for (const lonOffset of gridOffsets) {
@@ -214,22 +245,26 @@ function findSeaValidPath(
         lon: midLon + lonOffset * gridStep
       };
 
-      if (isPointInSea(candidate.lat, candidate.lon)) {
-        const depth = checkDepth(candidate.lat, candidate.lon);
-        if (depth > 0 && (!checkShallowWater || depth >= minDepth)) {
-          const toCandidate = isSegmentValid(from, candidate, minDepth, checkShallowWater);
-          const fromCandidate = isSegmentValid(candidate, to, minDepth, checkShallowWater);
+      if (!isPointInSea(candidate.lat, candidate.lon)) continue;
+      if (isLandFast(candidate.lat, candidate.lon)) continue;
 
-          if (toCandidate && fromCandidate) {
-            return [candidate];
-          }
-        }
+      const depth = checkDepth(candidate.lat, candidate.lon);
+      if (depth <= 0) continue;
+      if (checkShallowWater && depth < minDepth) continue;
+
+      const toCandidate = isSegmentValid(from, candidate, minDepth, checkShallowWater);
+      const fromCandidate = isSegmentValid(candidate, to, minDepth, checkShallowWater);
+
+      if (toCandidate && fromCandidate) {
+        console.log(`[findSeaValidPath] Found valid intermediate via grid search`);
+        return [candidate];
       }
     }
   }
 
-  // Fallback: return midpoint
-  return [{ lat: midLat, lon: midLon }];
+  // Return empty to trigger A* fallback (don't return invalid midpoint!)
+  console.warn(`[findSeaValidPath] Could not find valid intermediate, will use A* fallback`);
+  return [];
 }
 
 /**
