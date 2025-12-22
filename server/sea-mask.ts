@@ -15,6 +15,8 @@ import { calculateGreatCircleDistance } from './vessel-performance';
 // Note: isLandFast is NOT used for point checks because it incorrectly marks
 // some enclosed seas (Marmara, straits) as land. Only segmentCrossesLandFast is used.
 import { segmentCrossesLandFast, isLandFast } from './land-grid';
+// Import blocked zones for fast rejection of critical land areas
+import { isInBlockedZone, segmentCrossesBlockedZone } from './blocked-zones';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -197,8 +199,6 @@ function getNeighbors(point: GridPoint): GridPoint[] {
       if (row < 0 || row >= mask.height) continue;
 
       // WRAP AROUND DATELINE: Allow Pacific routes to cross 180° longitude
-      // When col goes negative, wrap to the right side of the grid
-      // When col exceeds width, wrap to the left side
       if (col < 0) col = mask.width + col;
       if (col >= mask.width) col = col - mask.width;
 
@@ -208,17 +208,29 @@ function getNeighbors(point: GridPoint): GridPoint[] {
         continue;
       }
 
-      // CRITICAL: Check if transition crosses land using 50m polygons
-      // This catches narrow land masses that span a single ocean mask cell
       const candidateLatLon = cellToLatLon(candidate);
-      if (isLandFast(candidateLatLon.lat, candidateLatLon.lon)) {
-        // Candidate cell center is on land - skip
+
+      // Check 0: BLOCKED ZONES - Pre-defined critical land areas
+      // Skip if candidate is in a blocked zone (Calabria, etc.)
+      if (isInBlockedZone(candidateLatLon.lat, candidateLatLon.lon)) {
         continue;
       }
 
-      // Check the segment between cells doesn't cross land
-      // Only do this for diagonal moves (more likely to cut corners)
+      // Check 1: 50m land polygon point check
+      if (isLandFast(candidateLatLon.lat, candidateLatLon.lon)) {
+        continue;
+      }
+
+      // Check 2: Segment crossing for diagonal moves
       if (dr !== 0 && dc !== 0) {
+        // Check blocked zone crossing
+        if (segmentCrossesBlockedZone(
+          currentLatLon.lat, currentLatLon.lon,
+          candidateLatLon.lat, candidateLatLon.lon
+        )) {
+          continue;
+        }
+        // Check 50m polygon crossing
         if (segmentCrossesLandFast(
           currentLatLon.lat, currentLatLon.lon,
           candidateLatLon.lat, candidateLatLon.lon
@@ -364,11 +376,11 @@ export function isPointInSea(lat: number, lon: number): boolean {
 
 /**
  * Check if a line segment crosses land
- * Uses DUAL validation for maximum accuracy:
+ * Uses TRIPLE validation for maximum accuracy:
+ * 0. BLOCKED ZONES - Pre-defined critical land areas (fastest check)
  * 1. OCEAN MASK with interpolation (reliable for enclosed seas)
  * 2. 50m LAND POLYGONS (catches narrow land masses like Calabria, peninsulas)
  *
- * Both methods must agree the segment is sea-only for it to be valid.
  * @returns true if segment crosses land
  */
 export function segmentCrossesLand(
@@ -377,7 +389,13 @@ export function segmentCrossesLand(
   lat2: number,
   lon2: number
 ): boolean {
-  // Check endpoints first using ocean mask
+  // Check 0: BLOCKED ZONES - Pre-defined critical land areas
+  // Fastest check - immediately reject if crosses Calabria, Peloponnese, etc.
+  if (segmentCrossesBlockedZone(lat1, lon1, lat2, lon2)) {
+    return true;
+  }
+
+  // Check endpoints using ocean mask
   if (!isPointInSea(lat1, lon1) || !isPointInSea(lat2, lon2)) {
     return true;
   }

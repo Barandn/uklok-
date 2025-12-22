@@ -1,0 +1,146 @@
+{
+  "description": "Critical land zones that ships MUST avoid. Algorithm should immediately reject routes passing through these areas.",
+  "version": "1.0",
+  "zones": [
+    {
+      "name": "Calabria (Italy)",
+      "description": "Narrow peninsula at the toe of Italy's boot",
+      "points": [
+        { "lat": 39.8, "lon": 16.0, "radius": 40 },
+        { "lat": 39.5, "lon": 16.2, "radius": 35 },
+        { "lat": 39.2, "lon": 16.3, "radius": 35 },
+        { "lat": 38.9, "lon": 16.4, "radius": 30 },
+        { "lat": 38.7, "lon": 16.2, "radius": 30 },
+        { "lat": 38.5, "lon": 15.9, "radius": 25 },
+        { "lat": 38.2, "lon": 15.7, "radius": 30 }
+      ]
+    },
+    {
+      "name": "Strait of Messina",
+      "description": "Narrow strait between Sicily and Calabria - very narrow, ships should go around",
+      "points": [
+        { "lat": 38.2, "lon": 15.6, "radius": 15 },
+        { "lat": 38.1, "lon": 15.65, "radius": 12 }
+      ]
+    },
+    {
+      "name": "Southern Italy Boot",
+      "description": "The heel and ankle of Italy's boot (Puglia/Basilicata)",
+      "points": [
+        { "lat": 40.5, "lon": 17.2, "radius": 45 },
+        { "lat": 40.2, "lon": 17.8, "radius": 40 },
+        { "lat": 40.0, "lon": 18.2, "radius": 35 },
+        { "lat": 39.8, "lon": 18.4, "radius": 30 }
+      ]
+    },
+    {
+      "name": "Peloponnese (Greece)",
+      "description": "Large peninsula in southern Greece",
+      "points": [
+        { "lat": 37.5, "lon": 22.0, "radius": 50 },
+        { "lat": 37.2, "lon": 22.3, "radius": 45 },
+        { "lat": 36.8, "lon": 22.5, "radius": 40 },
+        { "lat": 36.5, "lon": 22.8, "radius": 35 },
+        { "lat": 37.0, "lon": 21.5, "radius": 40 },
+        { "lat": 36.7, "lon": 21.8, "radius": 35 }
+      ]
+    },
+    {
+      "name": "Corinth Canal Area",
+      "description": "Isthmus of Corinth - too narrow for large ships",
+      "points": [
+        { "lat": 37.9, "lon": 22.9, "radius": 20 },
+        { "lat": 37.95, "lon": 23.0, "radius": 18 }
+      ]
+    },
+    {
+      "name": "Gallipoli Peninsula (Turkey)",
+      "description": "Narrow peninsula at Dardanelles entrance",
+      "points": [
+        { "lat": 40.4, "lon": 26.4, "radius": 25 },
+        { "lat": 40.2, "lon": 26.3, "radius": 20 },
+        { "lat": 40.0, "lon": 26.2, "radius": 20 }
+      ]
+    },
+    {
+      "name": "Crimean Peninsula",
+      "description": "Large peninsula in Black Sea",
+      "points": [
+        { "lat": 45.0, "lon": 34.0, "radius": 60 },
+        { "lat": 44.5, "lon": 33.5, "radius": 55 },
+        { "lat": 44.8, "lon": 34.5, "radius": 50 },
+        { "lat": 45.2, "lon": 35.0, "radius": 45 }
+      ]
+    },
+    {
+      "name": "Jutland Peninsula (Denmark)",
+      "description": "Peninsula separating North Sea from Baltic",
+      "points": [
+        { "lat": 56.0, "lon": 9.5, "radius": 50 },
+        { "lat": 55.5, "lon": 9.0, "radius": 45 },
+        { "lat": 55.0, "lon": 9.5, "radius": 40 },
+        { "lat": 57.0, "lon": 10.0, "radius": 45 }
+      ]
+    },
+    {
+      "name": "Iberian Peninsula - Gibraltar Strait approach",
+      "description": "Southern tip of Spain near Gibraltar",
+      "points": [
+        { "lat": 36.1, "lon": -5.5, "radius": 20 },
+        { "lat": 36.0, "lon": -5.8, "radius": 18 }
+      ]
+    },
+    {
+      "name": "Sinai Peninsula",
+      "description": "Peninsula between Gulf of Suez and Gulf of Aqaba",
+      "points": [
+        { "lat": 29.5, "lon": 33.5, "radius": 60 },
+        { "lat": 29.0, "lon": 34.0, "radius": 55 },
+        { "lat": 28.5, "lon": 34.5, "radius": 50 }
+      ]
+    },
+    {
+      "name": "Malay Peninsula - Strait of Malacca",
+      "description": "Narrow parts of Malacca Strait",
+      "points": [
+        { "lat": 1.3, "lon": 103.8, "radius": 25 },
+        { "lat": 2.5, "lon": 101.5, "radius": 30 },
+        { "lat": 4.0, "lon": 100.5, "radius": 35 }
+      ]
+    },
+    {
+      "name": "Korean Peninsula",
+      "description": "Korean Peninsula land mass",
+      "points": [
+        { "lat": 37.5, "lon": 127.0, "radius": 80 },
+        { "lat": 36.0, "lon": 127.5, "radius": 70 },
+        { "lat": 35.0, "lon": 128.5, "radius": 60 }
+      ]
+    },
+    {
+      "name": "Brittany Peninsula (France)",
+      "description": "Northwestern France peninsula",
+      "points": [
+        { "lat": 48.5, "lon": -3.5, "radius": 45 },
+        { "lat": 48.0, "lon": -4.5, "radius": 40 },
+        { "lat": 47.5, "lon": -3.0, "radius": 35 }
+      ]
+    },
+    {
+      "name": "Cornwall Peninsula (UK)",
+      "description": "Southwestern England peninsula",
+      "points": [
+        { "lat": 50.2, "lon": -5.0, "radius": 30 },
+        { "lat": 50.0, "lon": -5.5, "radius": 25 }
+      ]
+    },
+    {
+      "name": "Scandinavia - Norwegian Coast",
+      "description": "Narrow fjord regions to avoid",
+      "points": [
+        { "lat": 62.0, "lon": 6.0, "radius": 40 },
+        { "lat": 60.0, "lon": 5.5, "radius": 35 }
+      ]
+    }
+  ]
+}

@@ -9,6 +9,8 @@ import { WeatherData, fetchCombinedWeather, checkDepth } from "./weather";
 import { isPointInSea, segmentCrossesLand, validateSeaRoute, findOceanPath } from './sea-mask';
 // Import 50m land polygon checks for additional validation
 import { segmentCrossesLandFast, isLandFast } from './land-grid';
+// Import blocked zones for fast rejection of routes through critical land areas
+import { isInBlockedZone, segmentCrossesBlockedZone } from './blocked-zones';
 
 /**
  * Maximum attempts for resampling waypoints when validation fails
@@ -30,10 +32,11 @@ function isDefinitelyInSea(lat: number, lon: number): boolean {
 
 /**
  * Check if a segment between two points is valid (no land crossing, adequate depth)
- * Uses TRIPLE validation for maximum accuracy:
+ * Uses QUAD validation for maximum accuracy:
+ * 0. BLOCKED ZONES - Pre-defined critical land areas (fastest check)
  * 1. Ocean mask endpoint check
- * 2. Sea mask segment validation (includes 50m polygon check)
- * 3. Direct 50m land polygon segment check (catches narrow peninsulas)
+ * 2. 50m land polygon checks
+ * 3. Sea mask segment validation
  * @param from Start point
  * @param to End point
  * @param minDepth Minimum required depth (ship's draft)
@@ -46,24 +49,28 @@ function isSegmentValid(
   minDepth: number,
   checkShallowWater: boolean
 ): boolean {
+  // Check 0: BLOCKED ZONES - Fastest check, pre-defined critical land areas
+  // Immediately reject if segment crosses Calabria, Peloponnese, etc.
+  if (segmentCrossesBlockedZone(from.lat, from.lon, to.lat, to.lon)) {
+    return false;
+  }
+
   // Check 1: Endpoint validation using ocean mask
   if (!isDefinitelyInSea(from.lat, from.lon) || !isDefinitelyInSea(to.lat, to.lon)) {
     return false;
   }
 
   // Check 2: Endpoint validation using 50m land polygons
-  // This catches points that ocean mask misses due to low resolution
   if (isLandFast(from.lat, from.lon) || isLandFast(to.lat, to.lon)) {
     return false;
   }
 
   // Check 3: CRITICAL - Direct 50m land polygon segment check
-  // This catches narrow peninsulas like Calabria that ocean mask misses
   if (segmentCrossesLandFast(from.lat, from.lon, to.lat, to.lon)) {
     return false;
   }
 
-  // Check 4: Sea mask validation (includes its own 50m polygon check now)
+  // Check 4: Sea mask validation
   if (segmentCrossesLand(from.lat, from.lon, to.lat, to.lon)) {
     return false;
   }
@@ -77,7 +84,6 @@ function isSegmentValid(
       const lon = from.lon + t * (to.lon - from.lon);
       const depth = checkDepth(lat, lon);
 
-      // If depth is less than ship's draft, segment is invalid
       if (depth < minDepth) {
         return false;
       }
