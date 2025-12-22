@@ -9,8 +9,12 @@ import * as path from 'path';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { calculateGreatCircleDistance } from './vessel-performance';
-// Note: land-grid imports removed - 50m land polygons incorrectly mark
-// some enclosed seas (Marmara, straits) as land. Ocean mask is more reliable.
+// Re-enable land-grid for SEGMENT validation only (not point checks)
+// Ocean mask alone (0.25° = ~28km resolution) cannot detect narrow land masses
+// like Calabria (~30km wide). 50m land polygons provide accurate segment crossing detection.
+// Note: isLandFast is NOT used for point checks because it incorrectly marks
+// some enclosed seas (Marmara, straits) as land. Only segmentCrossesLandFast is used.
+import { segmentCrossesLandFast, isLandFast } from './land-grid';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -181,6 +185,7 @@ function key(point: GridPoint): string {
 function getNeighbors(point: GridPoint): GridPoint[] {
   const mask = loadSeaMask();
   const neighbors: GridPoint[] = [];
+  const currentLatLon = cellToLatLon(point);
 
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
@@ -198,11 +203,31 @@ function getNeighbors(point: GridPoint): GridPoint[] {
       if (col >= mask.width) col = col - mask.width;
 
       const candidate: GridPoint = { row, col };
-      // Only check ocean mask - removed isLandFast check because
-      // 50m land polygons incorrectly mark some enclosed seas as land
-      if (isSeaCell(candidate)) {
-        neighbors.push(candidate);
+      // Check ocean mask first - fast rejection
+      if (!isSeaCell(candidate)) {
+        continue;
       }
+
+      // CRITICAL: Check if transition crosses land using 50m polygons
+      // This catches narrow land masses that span a single ocean mask cell
+      const candidateLatLon = cellToLatLon(candidate);
+      if (isLandFast(candidateLatLon.lat, candidateLatLon.lon)) {
+        // Candidate cell center is on land - skip
+        continue;
+      }
+
+      // Check the segment between cells doesn't cross land
+      // Only do this for diagonal moves (more likely to cut corners)
+      if (dr !== 0 && dc !== 0) {
+        if (segmentCrossesLandFast(
+          currentLatLon.lat, currentLatLon.lon,
+          candidateLatLon.lat, candidateLatLon.lon
+        )) {
+          continue;
+        }
+      }
+
+      neighbors.push(candidate);
     }
   }
 
@@ -258,11 +283,17 @@ export function findOceanPath(startLat: number, startLon: number, endLat: number
 
     if (currentKey === endKey) {
       const gridPath = reconstructPath(current, cameFrom, startKey);
-      const latLonPath: LatLon[] = gridPath.map(cellToLatLon);
+      let latLonPath: LatLon[] = gridPath.map(cellToLatLon);
       // use exact start/end coordinates for user clarity
       latLonPath[0] = { lat: startLat, lon: startLon };
       latLonPath[latLonPath.length - 1] = { lat: endLat, lon: endLon };
       console.log(`[A*] Path found in ${iterations} iterations with ${latLonPath.length} waypoints`);
+
+      // POST-PROCESSING: Validate path against 50m land polygons
+      // Ocean mask cells (0.25° = ~28km) can contain narrow land masses
+      // that the grid-based A* doesn't detect. Fix any invalid segments.
+      latLonPath = validateAndFixPath(latLonPath);
+
       return { success: true, path: latLonPath };
     }
 
@@ -333,8 +364,11 @@ export function isPointInSea(lat: number, lon: number): boolean {
 
 /**
  * Check if a line segment crosses land
- * Uses OCEAN MASK with interpolation along segment
- * More reliable for enclosed seas than land polygon checks
+ * Uses DUAL validation for maximum accuracy:
+ * 1. OCEAN MASK with interpolation (reliable for enclosed seas)
+ * 2. 50m LAND POLYGONS (catches narrow land masses like Calabria, peninsulas)
+ *
+ * Both methods must agree the segment is sea-only for it to be valid.
  * @returns true if segment crosses land
  */
 export function segmentCrossesLand(
@@ -343,8 +377,15 @@ export function segmentCrossesLand(
   lat2: number,
   lon2: number
 ): boolean {
-  // Check endpoints first
+  // Check endpoints first using ocean mask
   if (!isPointInSea(lat1, lon1) || !isPointInSea(lat2, lon2)) {
+    return true;
+  }
+
+  // CRITICAL: Check 50m land polygons for accurate narrow land detection
+  // This catches peninsulas like Calabria, Peloponnese, narrow straits, etc.
+  // that the coarse ocean mask (0.25° = ~28km) cannot detect
+  if (segmentCrossesLandFast(lat1, lon1, lat2, lon2)) {
     return true;
   }
 
@@ -352,11 +393,11 @@ export function segmentCrossesLand(
   const distanceNm = calculateGreatCircleDistance(lat1, lon1, lat2, lon2);
   const distanceKm = distanceNm * 1.852;
 
-  // Sample every 5km (good balance between accuracy and speed)
-  const sampleIntervalKm = 5;
-  const samples = Math.max(10, Math.ceil(distanceKm / sampleIntervalKm));
+  // Sample every 2km for higher accuracy (was 5km)
+  const sampleIntervalKm = 2;
+  const samples = Math.max(20, Math.ceil(distanceKm / sampleIntervalKm));
 
-  // Check points along the segment
+  // Check points along the segment using ocean mask
   for (let i = 1; i < samples; i++) {
     const fraction = i / samples;
     const lat = lat1 + fraction * (lat2 - lat1);
@@ -401,5 +442,121 @@ export function validateSeaRoute(
     landPoints,
     landSegments
   };
+}
+
+/**
+ * Validate a path and fix any segments that cross land
+ * Uses 50m land polygons for accurate detection of narrow land masses
+ * @param path Original path from A* algorithm
+ * @returns Fixed path with intermediate waypoints where needed
+ */
+function validateAndFixPath(path: LatLon[]): LatLon[] {
+  if (path.length < 2) return path;
+
+  const fixedPath: LatLon[] = [path[0]];
+  let fixCount = 0;
+  const maxFixes = 50; // Prevent infinite loops
+
+  for (let i = 0; i < path.length - 1; i++) {
+    const from = path[i];
+    const to = path[i + 1];
+
+    // Check if segment crosses land using 50m polygons
+    if (segmentCrossesLandFast(from.lat, from.lon, to.lat, to.lon)) {
+      fixCount++;
+      if (fixCount > maxFixes) {
+        console.warn(`[validateAndFixPath] Max fixes reached (${maxFixes}), stopping`);
+        fixedPath.push(to);
+        continue;
+      }
+
+      // Find intermediate waypoints to avoid land
+      const intermediates = findSeaValidIntermediates(from, to);
+      for (const pt of intermediates) {
+        fixedPath.push(pt);
+      }
+    }
+
+    fixedPath.push(to);
+  }
+
+  if (fixCount > 0) {
+    console.log(`[validateAndFixPath] Fixed ${fixCount} land-crossing segments, path now has ${fixedPath.length} waypoints`);
+  }
+
+  return fixedPath;
+}
+
+/**
+ * Find intermediate waypoints to avoid land between two points
+ * Uses perpendicular offsets and recursive subdivision
+ */
+function findSeaValidIntermediates(
+  from: LatLon,
+  to: LatLon,
+  depth: number = 0
+): LatLon[] {
+  const maxDepth = 4;
+
+  // If segment is now valid, no intermediates needed
+  if (!segmentCrossesLandFast(from.lat, from.lon, to.lat, to.lon)) {
+    return [];
+  }
+
+  if (depth >= maxDepth) {
+    // Return midpoint as best effort
+    return [{ lat: (from.lat + to.lat) / 2, lon: (from.lon + to.lon) / 2 }];
+  }
+
+  const midLat = (from.lat + to.lat) / 2;
+  const midLon = (from.lon + to.lon) / 2;
+
+  // Calculate perpendicular direction
+  const dLat = to.lat - from.lat;
+  const dLon = to.lon - from.lon;
+
+  // Perpendicular unit vector (normalized)
+  const perpLength = Math.sqrt(dLat * dLat + dLon * dLon);
+  const perpLat = -dLon / perpLength;
+  const perpLon = dLat / perpLength;
+
+  // Try different offsets in both perpendicular directions
+  const offsets = [0.5, 1.0, 1.5, 2.0, 3.0]; // degrees
+
+  for (const offset of offsets) {
+    for (const dir of [1, -1]) {
+      const candidate: LatLon = {
+        lat: midLat + perpLat * offset * dir,
+        lon: midLon + perpLon * offset * dir
+      };
+
+      // Check if candidate is in sea
+      if (!isPointInSea(candidate.lat, candidate.lon)) {
+        continue;
+      }
+
+      // Check if segments to/from candidate are valid
+      const toCandidate = !segmentCrossesLandFast(from.lat, from.lon, candidate.lat, candidate.lon);
+      const fromCandidate = !segmentCrossesLandFast(candidate.lat, candidate.lon, to.lat, to.lon);
+
+      if (toCandidate && fromCandidate) {
+        return [candidate];
+      }
+
+      // If one direction is valid, recursively fix the other
+      if (toCandidate) {
+        const afterPts = findSeaValidIntermediates(candidate, to, depth + 1);
+        return [candidate, ...afterPts];
+      }
+
+      if (fromCandidate) {
+        const beforePts = findSeaValidIntermediates(from, candidate, depth + 1);
+        return [...beforePts, candidate];
+      }
+    }
+  }
+
+  // Fallback: return midpoint
+  return [{ lat: midLat, lon: midLon }];
 }
 
